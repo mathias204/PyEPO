@@ -3,8 +3,6 @@
 """
 Surrogate Loss function
 """
-
-import numpy as np
 import torch
 from torch.autograd import Function
 
@@ -212,3 +210,104 @@ class perturbationGradient(optModule):
             else:
                 raise ValueError("Invalid modelSense. Must be EPO.MINIMIZE or EPO.MAXIMIZE.")
         return loss
+    
+
+
+class StochasticSmoothingLoss(optModule):
+    def __init__(self, optmodel, processes=1, solve_ratio=1, reduction="mean", dataset=None, S = 800):
+        """
+        Args:
+            optmodel (optModel): an PyEPO optimization model
+            processes (int): number of processors, 1 for single-core, 0 for all of cores
+            solve_ratio (float): the ratio of new solutions computed during training
+            reduction (str): the reduction to apply to the output
+            dataset (None/optDataset): the training data
+        """
+        super().__init__(optmodel, processes, solve_ratio, reduction, dataset)
+        # build criterion
+        self.S = S
+        self.ssl = StochasticSmoothingLossFun()
+
+
+    def forward(self, weights, true_cost, true_obj, data_sols, data_objs):
+        loss = self.ssl.apply(weights, true_cost, true_obj, data_sols, data_objs, self)
+        # reduction
+        if self.reduction == "mean":
+            loss = torch.mean(loss)
+        elif self.reduction == "sum":
+            loss = torch.sum(loss)
+        elif self.reduction == "none":
+            loss = loss
+        else:
+            raise ValueError("No reduction '{}'.".format(self.reduction))
+        return loss
+    
+
+class StochasticSmoothingLossFun(Function):
+    @staticmethod
+    def forward(ctx, weights, true_cost, true_obj, data_sols, data_objs, module: optModule):
+        ctx.weights = weights
+        ctx.true_cost= true_cost
+        ctx.true_obj = true_obj
+        ctx.module = module   
+        ctx.data_sols = data_sols   
+        ctx.data_objs = data_objs
+        device = weights.device   
+
+        B, N = weights.shape  # N = number of candidates
+        S = module.S
+
+        indices = torch.multinomial(weights, S, replacement=True).to(device)  # (B, S)
+        batch_idx = torch.arange(B, device=weights.device).unsqueeze(1).expand(B, S)  # (B, S)
+        sampled_sols = data_sols[batch_idx, indices]  # (B, S, num_vars)
+        sampled_obj = data_objs[batch_idx, indices].squeeze(-1)  # (B, S)
+
+        realised_obj = module.optmodel.cal_obj(true_cost, sampled_sols)
+        realised_obj = torch.tensor(realised_obj, dtype=torch.float32).to(true_cost.device)
+
+        if module.optmodel.modelSense == EPO.MINIMIZE:
+            loss =  torch.mean(realised_obj - sampled_obj)
+        else:
+            loss = torch.mean(true_obj - sampled_obj)
+
+        return loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        weights = ctx.weights
+        B, N = ctx.weights.shape  # N = number of candidates
+        S = ctx.module.S
+        device = weights.device
+        # sample indices
+        indices = torch.multinomial(weights, S, replacement=True).to(device)  # (B, S)
+        batch_idx = torch.arange(B, device=weights.device).unsqueeze(1).expand(B, S)  # (B, S)
+
+        sampled_sols = ctx.data_sols[batch_idx, indices]  # (B, S, num_vars)
+    
+        L_i = ctx.module.optmodel.cal_obj(ctx.true_cost, sampled_sols)
+        L_i = torch.tensor(L_i, dtype=torch.float32).to(device)
+        assert L_i.shape == (B, S)
+
+        if ctx.module.optmodel.modelSense == EPO.MINIMIZE:
+            L_i = L_i - ctx.true_obj  # ℒ_i
+        else:
+            L_i = ctx.true_obj - L_i  # ℒ_i
+
+        # L_i = ctx.module.optmodel.get_objective_value(ctx.true_cost, sols) - ctx.true_obj  # ℒ_i #TODO: this can be optimized, to cache losses
+        L_i = (L_i - L_i.mean())  # baseline to reduce variance (optional)                          #TODO: check with sfge.py if we can use other sol
+
+        gradients = torch.zeros(ctx.weights.shape).to(device)
+        eps = 1e-12
+
+        vals = L_i * (1.0 / (weights.gather(1, indices) + eps))
+        gradients.scatter_add_(1, indices, vals)
+
+        gradients /= ctx.module.S
+
+        # print("Gradients:", gradients.shape)
+
+        # multiply with incoming grad_output scalar
+        # gradients *= grad_output
+
+        # other inputs are constants, so None
+        return gradients, None, None, None, None, None, None
