@@ -3,14 +3,14 @@ from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pyepo.func.surrogate import SPOPlus, StochasticSmoothingLoss
+from pyepo.func.surrogate import StochasticSmoothingLoss
 from pyepo.model.opt import optModel
 from tqdm import tqdm
-from pyepo.utlis import getArgs
 import numpy as np
-from pathos.multiprocessing import ProcessingPool
 import time as time
 import copy
+
+from pkg.pyepo import EPO
 
 class NeuralPrediction(PredictivePrescription):
 
@@ -49,9 +49,9 @@ class NeuralPrediction(PredictivePrescription):
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
 
-        print(0.5*len(self.features))
-        # loss_fn = SPOPlus(self.model, processes=1)
-        loss_fn = StochasticSmoothingLoss(self.model, processes=1, S = int(0.5*len(self.features)))
+        loss_fn_forward = StochasticSmoothingLoss(self.model, processes=1, S = int(0.8*len(self.features)))
+        loss_fn = new_loss_fn
+        S = 1 # S for backward calculation
 
         train_loader = torch.utils.data.DataLoader(
             LeaveOneOutDataset(self.model, X_train, y_train),
@@ -63,140 +63,114 @@ class NeuralPrediction(PredictivePrescription):
         )
 
         early_stopper = EarlyStopper(5, 0)
-
+        torch.autograd.set_detect_anomaly(True)
 
         for epoch in range(epochs):
             self.weight_model.train()
             train_loss = 0.0
+            opt_sum = 0.0
             for i, data in enumerate(train_loader):
-                x, c, feats_batch, costs_batch, w, z, data_sols, data_objs = data
+                x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = data
 
                 if torch.cuda.is_available():
-                    x, c, feats_batch, costs_batch, w, z, data_sols, data_objs = x.cuda(), c.cuda(), feats_batch.cuda(), costs_batch.cuda(), w.cuda(), z.cuda(), data_sols.cuda(), data_objs.cuda()
+                    x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
 
-                weights = self._get_weights(x, feats_batch)             # [B, N]
-                # preds = (weights.unsqueeze(-1) * costs_batch).sum(dim=1)  # [B, C] 
-
-                # preds = []
-                # start_time = time.time()
-                # for i, (weight, costs) in enumerate(zip(weights, costs_batch)):
-                #     self.model.setWeightObj(weight, costs)
-                #     sol, obj = self.model.solve()
-                #     if isinstance(sol, torch.Tensor):
-                #         sol = sol.detach().cpu().numpy()
-                #     else:
-                #         sol = np.array(sol)
-                #     preds.append(sol)
-                # print("Solving time per batch: {:.4f} seconds".format(time.time() - start_time))
-                # weights = weights.detach()
-                # costs_batch = costs_batch.detach()
-                # preds = _solveInParallel(weights, costs_batch, self.model)[0]
-                # print(preds.shape)
-
-                # preds = torch.FloatTensor(np.array(preds)).to(c.device)
-                # loss = loss_fn(preds, c, w, z)
-                loss = loss_fn(weights, c, z, data_sols, data_objs)
+                weights = self._get_weights(x, data_feats)             # [B, N]
+                real_loss = loss_fn_forward(weights, c, y_obj, data_sols)
+                loss = loss_fn(weights, c, y_obj, data_sols, self.model, S)
+                
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-                train_loss += loss.item() * len(x)
 
-            train_loss /= len(train_loader.dataset)
+                train_loss += real_loss.item()
+                opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
+
+            train_loss = train_loss / (opt_sum + 1e-7)
 
             # validation
             self.weight_model.eval()
             with torch.no_grad():
                 val_loss = 0.0
+                new_loss = 0.0
+                opt_sum = 0.0
                 for i, data in enumerate(val_loader):
-                    x, c, feats_batch, costs_batch, w, z, data_sols, data_objs = data
+                    x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = data
 
                     feats_batch = torch.FloatTensor(X_train)
-                    y_batch = torch.FloatTensor(y_train)
+                    costs_batch = torch.FloatTensor(y_train)
                     sols = torch.FloatTensor(train_loader.dataset.get_sols()[0])
                     objs = torch.FloatTensor(train_loader.dataset.get_sols()[1])
                     
                     if torch.cuda.is_available():
-                        x, c, feats_batch, costs_batch, w, z, data_sols, data_objs = x.cuda(), c.cuda(), feats_batch.cuda(), costs_batch.cuda(), w.cuda(), z.cuda(), data_sols.cuda(), data_objs.cuda()
+                        x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
+
                         feats_batch = feats_batch.cuda()
-                        y_batch = y_batch.cuda()
                         sols = sols.cuda()
                         objs = objs.cuda()
 
-
-
                     feats_batch = feats_batch.unsqueeze(0).expand(len(x), -1, -1).contiguous()  # [B, N, D]
-                    y_batch = y_batch.unsqueeze(0).expand(len(costs_batch), -1, -1).contiguous()
                     sols = sols.unsqueeze(0).expand(len(x), -1, -1).contiguous()
                     objs = objs.unsqueeze(0).expand(len(x), -1, -1).contiguous()
+                    
                     weights = self._get_weights(x, feats_batch)
 
-                    # preds = (weights.unsqueeze(-1) * y_batch).sum(dim=1) 
+                    preds = []
+                    for i, weight in enumerate(weights):
+                        self.model.setWeightObj(weight, costs_batch)
+                        sol, obj = self.model.solve()
+                        if isinstance(sol, torch.Tensor):
+                            sol = sol.detach().cpu().numpy()
+                        else:
+                            sol = np.array(sol)
+                        preds.append(sol)
 
-                    # preds = []
-                    # for i, (weight, costs) in enumerate(zip(weights, costs_batch)):
-                    #     self.model.setWeightObj(weight, costs)
-                    #     sol, obj = self.model.solve()
-                    #     if isinstance(sol, torch.Tensor):
-                    #         sol = sol.detach().cpu().numpy()
-                    #     else:
-                    #         sol = np.array(sol)
-                    #     preds.append(sol)
+                    
+                    preds = np.array(preds)
+                    y_obj_np = y_obj.squeeze().cpu().numpy()  
+
+                    realised_obj = self.model.cal_obj(c, preds)
+
+                    if self.model.modelSense == EPO.MINIMIZE:
+                        regret = realised_obj - y_obj_np
+                    else:
+                        regret = y_obj_np - realised_obj
+
+
+
+                    opt_sum += np.sum(abs(y_obj_np))
+                    new_loss += np.sum(regret).item()
                 
-                    # preds = torch.FloatTensor(np.array(preds)).to(c.device)
-                    # val_loss += loss_fn(weights, costs_batch, c, z, sols, objs).item() * len(x)
-                    val_loss += loss_fn(weights, c, z, sols, objs).item() * len(x)
+                    val_loss += loss_fn_forward(weights, c, y_obj, sols).item()
 
-
-                val_loss /= len(val_loader.dataset)
+                new_loss = new_loss / (opt_sum + 1e-7)
+                val_loss = val_loss / (opt_sum + 1e-7)
             if self.verbose:
-                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}")
+                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, new_val_loss={new_loss:.10f}")
             
             if early_stopper.step(val_loss, self.weight_model):
                 if self.verbose:
                     print(f"Early stopping at epoch {epoch+1}. Restored best weights.")
                 break
 
-def _solveInParallel(weights, costs, model):
-    ins_num = len(weights)
-    device = costs.device
-    print(device)
-    pool = ProcessingPool(5)
-    # get class
-    model_type = type(model)
-    # get args
-    args = getArgs(model)
-    # parallel computing
-    res = pool.amap(_solveWithObj4Par, weights, costs, [args] * ins_num,
-                    [model_type] * ins_num).get()
-    # get res
-    sol = torch.stack([r[0] for r in res], dim=0)
-    obj = torch.tensor([r[1] for r in res], dtype=torch.float32)
+def new_loss_fn(weights, true_cost, true_obj, data_sols, model: optModel, S):
+    B, N = weights.shape  # N = number of candidates
 
-    return sol, obj
+    indices = torch.multinomial(weights, S, replacement=True).to(weights.device)  # (B, S)
+    batch_idx = torch.arange(B, device=weights.device).unsqueeze(1).expand(B, S)  # (B, S)
+    sampled_sols = data_sols[batch_idx, indices]  # (B, S, num_vars)
 
+    realised_obj = model.cal_obj(true_cost, sampled_sols)
+    realised_obj = torch.from_numpy(realised_obj).to(true_cost.device).float()
 
-def _solveWithObj4Par(weights, cost, args, model_type):
-    """
-    A function to solve function in parallel processors
+    true_obj = true_obj.expand(-1, S) # (B, S)
 
-    Args:
-        cost (np.ndarray): cost of objective function
-        args (dict): optModel args
-        model_type (ABCMeta): optModel class type
-
-    Returns:
-        tuple: optimal solution (list) and objective value (float)
-    """
-    # rebuild model
-    optmodel: optModel = model_type(**args)
-    # set obj
-    optmodel.setWeightObj(weights, cost)
-    # solve
-    sol, obj = optmodel.solve()
-    # to tensor
-    sol = torch.tensor(sol, dtype=torch.float32)
-    return sol, obj
-
+    assert realised_obj.shape == true_obj.shape
+    if model.modelSense == EPO.MINIMIZE:
+        loss =  ((realised_obj - true_obj) * torch.log(weights[batch_idx, indices]))
+    else:
+        loss =  ((true_obj - realised_obj) * torch.log(weights[batch_idx, indices]))
+    return loss.mean()
 
 class EarlyStopper:
     def __init__(self, patience=1, min_delta=0):
@@ -327,10 +301,10 @@ class LeaveOneOutDataset(torch.utils.data.Dataset):
         return (
             torch.FloatTensor(x_i), 
             torch.FloatTensor(c_i), 
-            torch.FloatTensor(X_rest), 
-            torch.FloatTensor(C_rest),
             torch.FloatTensor(self.sols[index]),
             torch.FloatTensor(self.objs[index]),
+            torch.FloatTensor(X_rest), 
+            torch.FloatTensor(C_rest),
             torch.FloatTensor(self.sols[mask]),
             torch.FloatTensor(self.objs[mask]),
         )

@@ -123,7 +123,7 @@ class optGrbModel(optModel):
         else:
             c = np.asarray(c, dtype=np.float32)
 
-        # check if c is a PyTorch tensor
+        # check if x is a PyTorch tensor
         if isinstance(x, torch.Tensor):
             x = x.detach().cpu().numpy()
         else:
