@@ -153,4 +153,3 @@ class NeuralPrediction(PredictivePrescription):
                     print(f"Early stopping at epoch {epoch+1}. Restored best weights.")
                 break
 
-
