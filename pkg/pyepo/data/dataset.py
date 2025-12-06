@@ -106,6 +106,127 @@ class optDataset(Dataset):
             torch.FloatTensor(self.sols[index]),
             torch.FloatTensor(self.objs[index]),
         )
+    
+class optDatasetPP(Dataset):
+    """
+    This class is Torch Dataset for optimization problems specifically to train pedictive prescriptions.
+
+    Reference
+
+    Attributes:
+        model (optModel): Optimization models
+        feats (np.ndarray): Data features
+        costs (np.ndarray): Cost vectors
+        sols (np.ndarray): Optimal solutions
+        objs (np.ndarray): Optimal objective values
+    """
+    def __init__(self, model: optModel, feats, costs):
+        """
+        A method to create a optDataset from optModel
+
+        Args:
+            model (optModel): an instance of optModel
+            feats (np.ndarray): data features
+            costs (np.ndarray): costs of objective function
+        """
+        if not isinstance(model, optModel):
+            raise TypeError("arg model is not an optModel")
+        self.model = model
+        # data
+        self.feats = feats
+        self.costs = costs
+        # find optimal solutions
+        self.sols, self.objs = self._getSols()
+
+    def _getSols(self):
+        """
+        A method to get optimal solutions for all cost vectors
+        """
+        sols = []
+        objs = []
+        print("\nOptimizing for optDataset...", flush=True)
+        for c in tqdm(self.costs):
+            try:
+                sol, obj = self._solve(c)
+                # to numpy
+                if isinstance(sol, torch.Tensor):
+                    sol = sol.detach().cpu().numpy()
+            except:
+                raise ValueError(
+                    "For optModel, the method 'solve' should return solution vector and objective value."
+                )
+            sols.append(sol)
+            objs.append([obj])
+        return np.array(sols), np.array(objs)
+    
+    def get_sols(self):
+        """
+        A method to get optimal solutions
+
+        Returns:
+            tuple: optimal solutions (np.ndarray) and objective values (np.ndarray)
+        """
+        return self.sols, self.objs
+
+    def _solve(self, cost):
+        """
+        A method to solve optimization problem to get an optimal solution with given cost
+
+        Args:
+            cost (np.ndarray): cost of objective function
+
+        Returns:
+            tuple: optimal solution (np.ndarray) and objective value (float)
+        """
+        self.model.setObj(cost)
+        sol, obj = self.model.solve()
+        return sol, obj
+
+    def __len__(self):
+        """
+        A method to get data size
+
+        Returns:
+            int: the number of optimization problems
+        """
+        return len(self.costs)
+
+    def __getitem__(self, index):
+        """
+        A method to retrieve data
+
+        Args:
+            index (int): data index
+
+        Returns:
+            tuple:  data features sample (torch.tensor), 
+                    cost vector sample (torch.tensor), 
+                    optimal solution vector sample (torch.tensor),
+                    objective values sample (torch.tensor),
+                    data features excluding sample (torch.tensor),
+                    costs excluding sample (torch.tensor),
+                    optimal solutions excluding sample (torch.tensor),
+                    objective values excluding sample (torch.tensor),
+        """
+
+        x_i = self.feats[index]
+        c_i = self.costs[index]
+
+        mask = torch.ones(len(self.feats), dtype=torch.bool)
+        mask[index] = False
+        X_rest = self.feats[mask]
+        C_rest = self.costs[mask]
+
+        return (
+            torch.FloatTensor(x_i), 
+            torch.FloatTensor(c_i), 
+            torch.FloatTensor(self.sols[index]),
+            torch.FloatTensor(self.objs[index]),
+            torch.FloatTensor(X_rest), 
+            torch.FloatTensor(C_rest),
+            torch.FloatTensor(self.sols[mask]),
+            torch.FloatTensor(self.objs[mask]),
+        )
 
 
 class optDatasetKNN(optDataset):
