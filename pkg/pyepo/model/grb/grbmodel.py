@@ -41,6 +41,8 @@ class optGrbModel(optModel):
             self.modelSense = EPO.MAXIMIZE
         # turn off output
         self._model.Params.outputFlag = 0
+        self._objective_cache = {}
+
 
     def __repr__(self):
         return "optGRBModel " + self.__class__.__name__
@@ -83,6 +85,10 @@ class optGrbModel(optModel):
             c = np.asarray(c, dtype=np.float32)
         self._model.setObjective(self._objective_fun(c))
 
+    def _hash_cost(self, c):
+        # Convert to a tuple for hashing
+        return tuple(np.round(c, decimals=10))  # rounding avoids float precision mismatch
+
     def setWeightObj(self, w, c):
         """
         Set a weighted objective for predictive prescriptions.
@@ -102,7 +108,15 @@ class optGrbModel(optModel):
         if isinstance(c, torch.Tensor):
             c = c.detach().cpu().numpy()
 
-        obj = gp.quicksum(w[i] * self._objective_fun(c[i]) for i in range(len(w)))
+        # Build or retrieve objective terms from cache
+        obj_terms = []
+        for i in range(len(w)):
+            key = self._hash_cost(c[i])
+            if key not in self._objective_cache:
+                self._objective_cache[key] = self._objective_fun(c[i])
+            obj_terms.append(w[i] * self._objective_cache[key])
+        
+        obj = gp.quicksum(obj_terms)
 
         self._model.setObjective(obj)
 
@@ -123,7 +137,7 @@ class optGrbModel(optModel):
         else:
             c = np.asarray(c, dtype=np.float32)
 
-        # check if c is a PyTorch tensor
+        # check if x is a PyTorch tensor
         if isinstance(x, torch.Tensor):
             x = x.detach().cpu().numpy()
         else:

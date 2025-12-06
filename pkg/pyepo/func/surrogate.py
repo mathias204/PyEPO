@@ -8,6 +8,7 @@ from torch.autograd import Function
 
 from pyepo import EPO
 from pyepo.func.abcmodule import optModule
+from pyepo.model.opt import optModel
 from pyepo.func.utlis import _solve_or_cache
 
 class SPOPlus(optModule):
@@ -212,102 +213,27 @@ class perturbationGradient(optModule):
         return loss
     
 
+def SFGE(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor, data_sols:torch.Tensor, model: optModel, S) -> torch.Tensor:
+    S 
+    B, N = weights.shape
+    device = weights.device
+    cat = torch.distributions.Categorical(probs=weights)
 
-class StochasticSmoothingLoss(optModule):
-    def __init__(self, optmodel, processes=1, solve_ratio=1, reduction="mean", dataset=None, S = 800):
-        """
-        Args:
-            optmodel (optModel): an PyEPO optimization model
-            processes (int): number of processors, 1 for single-core, 0 for all of cores
-            solve_ratio (float): the ratio of new solutions computed during training
-            reduction (str): the reduction to apply to the output
-            dataset (None/optDataset): the training data
-        """
-        super().__init__(optmodel, processes, solve_ratio, reduction, dataset)
-        # build criterion
-        self.S = S
-        self.ssl = StochasticSmoothingLossFun()
+    indices = cat.sample((S,)).t()  # (B, S)
 
-
-    def forward(self, weights, true_cost, true_obj, data_sols, data_objs):
-        loss = self.ssl.apply(weights, true_cost, true_obj, data_sols, data_objs, self)
-        # reduction
-        if self.reduction == "mean":
-            loss = torch.mean(loss)
-        elif self.reduction == "sum":
-            loss = torch.sum(loss)
-        elif self.reduction == "none":
-            loss = loss
-        else:
-            raise ValueError("No reduction '{}'.".format(self.reduction))
-        return loss
+    batch_idx = torch.arange(B, device=device).unsqueeze(1).expand(B, S)  # (B, S)
+    sampled_sols = data_sols[batch_idx, indices] # (B, S, num_vars)
     
+    realised_obj = model.cal_obj(true_cost, sampled_sols)
+    realised_obj = torch.tensor(realised_obj, dtype=torch.float32).to(device) # (B, S)
+    true_obj = true_obj.expand(-1, S) # (B, S)
 
-class StochasticSmoothingLossFun(Function):
-    @staticmethod
-    def forward(ctx, weights, true_cost, true_obj, data_sols, data_objs, module: optModule):
-        ctx.weights = weights
-        ctx.true_cost= true_cost
-        ctx.true_obj = true_obj
-        ctx.module = module   
-        ctx.data_sols = data_sols   
-        ctx.data_objs = data_objs
-        device = weights.device   
+    assert true_obj.shape == realised_obj.shape    
 
-        B, N = weights.shape  # N = number of candidates
-        S = module.S
+    if model.modelSense == EPO.MINIMIZE:
+        loss: torch.Tensor =  (realised_obj - true_obj) * (cat.log_prob(indices.t())).t()
+    else:
+        # print("MAXIMIZE")
+        loss: torch.Tensor = (true_obj - realised_obj) * (cat.log_prob(indices.t())).t()
 
-        indices = torch.multinomial(weights, S, replacement=True).to(device)  # (B, S)
-        batch_idx = torch.arange(B, device=weights.device).unsqueeze(1).expand(B, S)  # (B, S)
-        sampled_sols = data_sols[batch_idx, indices]  # (B, S, num_vars)
-        sampled_obj = data_objs[batch_idx, indices].squeeze(-1)  # (B, S)
-
-        realised_obj = module.optmodel.cal_obj(true_cost, sampled_sols)
-        realised_obj = torch.tensor(realised_obj, dtype=torch.float32).to(true_cost.device)
-
-        if module.optmodel.modelSense == EPO.MINIMIZE:
-            loss =  torch.mean(realised_obj - sampled_obj)
-        else:
-            loss = torch.mean(true_obj - sampled_obj)
-
-        return loss
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        weights = ctx.weights
-        B, N = ctx.weights.shape  # N = number of candidates
-        S = ctx.module.S
-        device = weights.device
-        # sample indices
-        indices = torch.multinomial(weights, S, replacement=True).to(device)  # (B, S)
-        batch_idx = torch.arange(B, device=weights.device).unsqueeze(1).expand(B, S)  # (B, S)
-
-        sampled_sols = ctx.data_sols[batch_idx, indices]  # (B, S, num_vars)
-    
-        L_i = ctx.module.optmodel.cal_obj(ctx.true_cost, sampled_sols)
-        L_i = torch.tensor(L_i, dtype=torch.float32).to(device)
-        assert L_i.shape == (B, S)
-
-        if ctx.module.optmodel.modelSense == EPO.MINIMIZE:
-            L_i = L_i - ctx.true_obj  # ℒ_i
-        else:
-            L_i = ctx.true_obj - L_i  # ℒ_i
-
-        # L_i = ctx.module.optmodel.get_objective_value(ctx.true_cost, sols) - ctx.true_obj  # ℒ_i #TODO: this can be optimized, to cache losses
-        L_i = (L_i - L_i.mean())  # baseline to reduce variance (optional)                          #TODO: check with sfge.py if we can use other sol
-
-        gradients = torch.zeros(ctx.weights.shape).to(device)
-        eps = 1e-12
-
-        vals = L_i * (1.0 / (weights.gather(1, indices) + eps))
-        gradients.scatter_add_(1, indices, vals)
-
-        gradients /= ctx.module.S
-
-        # print("Gradients:", gradients.shape)
-
-        # multiply with incoming grad_output scalar
-        # gradients *= grad_output
-
-        # other inputs are constants, so None
-        return gradients, None, None, None, None, None, None
+    return loss.mean()
