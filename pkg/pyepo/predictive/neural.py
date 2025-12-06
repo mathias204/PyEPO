@@ -4,12 +4,18 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from pyepo.data.dataset import optDatasetPP
-from pyepo.func.surrogate import SFGE
 from pyepo.predictive.utils import EarlyStopper
 import numpy as np
 import time as time
-
 from pkg.pyepo import EPO
+from enum import Enum
+
+from pyepo.func.surrogate import SFGE
+from pyepo.func.surrogate import SPOPlus
+
+class LossType(Enum):
+    SFGE = 1
+    SPO = 2
 
 class NeuralPrediction(PredictivePrescription):
 
@@ -63,16 +69,27 @@ class NeuralPrediction(PredictivePrescription):
 
         return regret
     
+    def _sfge_loss(self, weights, costs, true_objs, data_sols, S) -> torch.Tensor:
+        loss = SFGE(weights, costs, true_objs, data_sols, self.model, S)
+        return loss
+    
+    def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
+        y_hat = (weights.unsqueeze(-1) * costs_batch).sum(dim=1)
 
-    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.2, calc_regret : bool = False):
+        return spo_plus(y_hat, true_costs, true_sols, true_objs)    
+    
+
+    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.2, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
         X_train, X_val, y_train, y_val = train_test_split(
             self.features, self.costs, test_size=val_split, random_state=0
         )
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
 
-        loss_fn = SFGE
         S = int(0.8*len(self.features)) # S for backward calculation
+
+        if loss_type == LossType.SPO:
+            spo_plus = SPOPlus(self.model)
 
         train_loader = torch.utils.data.DataLoader(
             optDatasetPP(self.model, X_train, y_train),
@@ -84,6 +101,7 @@ class NeuralPrediction(PredictivePrescription):
         )
 
         feats_full_data = torch.FloatTensor(X_train)
+        costs_full_data = torch.FloatTensor(y_train)
         sols_full_data = torch.FloatTensor(train_loader.dataset.get_sols()[0])
         objs_full_data = torch.FloatTensor(train_loader.dataset.get_sols()[1])
 
@@ -91,6 +109,7 @@ class NeuralPrediction(PredictivePrescription):
             feats_full_data = feats_full_data.cuda()
             sols_full_data = sols_full_data.cuda()
             objs_full_data = objs_full_data.cuda()
+            costs_full_data = costs_full_data.cuda()
 
             self.weight_model = self.weight_model.cuda()
 
@@ -107,7 +126,11 @@ class NeuralPrediction(PredictivePrescription):
                     x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
                 # forward pass
                 weights = self._get_weights(x, data_feats)             # [B, N]
-                loss = loss_fn(weights, c, y_obj, data_sols, self.model, S)
+                if loss_type == LossType.SFGE:
+                    loss = self._sfge_loss(weights, c, y_obj, data_sols, S)
+                elif loss_type == LossType.SPO:
+                    loss = self._spo_loss(spo_plus, weights, data_costs, c, y_sol, y_obj)
+
                 # backward pass
                 optimizer.zero_grad()
                 loss.backward()
@@ -139,8 +162,11 @@ class NeuralPrediction(PredictivePrescription):
                         regret = self._calculate_regret(weights, c, y_obj, sols)
                         opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
                         regret_loss += np.sum(regret).item()
-                
-                    val_loss += loss_fn(weights, c, y_obj, sols, self.model, S).item() * -1
+
+                    if loss_type == LossType.SFGE:
+                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1
+                    elif loss_type == LossType.SPO:
+                        val_loss += self._spo_loss(spo_plus, weights, costs_full_data, c, y_sol, y_obj).item()
 
                 if calc_regret:
                     regret_loss = regret_loss / opt_sum
