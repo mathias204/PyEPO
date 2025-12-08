@@ -7,7 +7,7 @@ from pyepo.data.dataset import optDatasetPP
 from pyepo.predictive.utils import EarlyStopper
 import numpy as np
 import time as time
-from pkg.pyepo import EPO
+from pyepo import EPO
 from enum import Enum
 
 from pyepo.func.surrogate import SFGE
