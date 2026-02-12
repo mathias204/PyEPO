@@ -5,11 +5,11 @@ Knapsack problem
 """
 
 import numpy as np
+from pyepo.model.omo.omomodel import optOmoModel
+from pyepo import EPO
 
 try:
     from pyomo import environ as pe
-    from pyepo import EPO
-    from pyepo.model.omo.omomodel import optOmoModel
     _HAS_PYOMO = True
 except ImportError:
     _HAS_PYOMO = False
