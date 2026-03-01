@@ -85,14 +85,13 @@ class SPOPlusFunc(Function):
         z = true_obj.detach()
         # check sol
         #_check_sol(c, w, z)
-
         # solve
         sol, obj = _solve_or_cache(2 * cp - c, module)
         # calculate loss
         if module.optmodel.modelSense == EPO.MINIMIZE:
-            loss = - obj + 2 *  (cp * w).sum(dim=1) - z.squeeze(dim=-1)
+            loss = - obj + 2 * torch.einsum("bi,bi->b", cp, w) - z.squeeze(dim=-1)
         elif module.optmodel.modelSense == EPO.MAXIMIZE:
-            loss = obj - 2 * (cp * w).sum(dim=1) + z.squeeze(dim=-1)
+            loss = obj - 2 * torch.einsum("bi,bi->b", cp, w) + z.squeeze(dim=-1)
         else:
             raise ValueError("Invalid modelSense. Must be EPO.MINIMIZE or EPO.MAXIMIZE.")
         # save solutions
@@ -238,40 +237,3 @@ def SFGE(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor,
         loss: torch.Tensor = (true_obj - realised_obj) * (cat.log_prob(indices.t())).t()
 
     return loss.mean()
-
-def novel(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor, data_sols:torch.Tensor, model: optModel) -> torch.Tensor:
-    realised_obj = model.cal_obj(true_cost, data_sols)
-    realised_obj = torch.tensor(realised_obj, dtype=torch.float32).to(weights.device)
-
-    if model.modelSense == EPO.MINIMIZE:
-        loss: torch.Tensor =  (realised_obj - true_obj) * weights
-    else:
-        loss: torch.Tensor = (true_obj - realised_obj) * weights  
-
-    final_loss = loss.sum()
-    return final_loss
-
-# def novel(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor, data_sols: torch.Tensor, model: optModel) -> torch.Tensor:
-#     # 1. Calculate raw costs (No Grad)
-#     with torch.no_grad():
-#         realised_obj = model.cal_obj(true_cost, data_sols)
-#         # realised_obj shape: [300] (or however many solutions you have)
-#         costs = torch.tensor(realised_obj, dtype=torch.float32).to(weights.device)
-
-#         # 2. CRITICAL: Normalize costs. 
-#         # This acts as a baseline. Positive values = "bad", Negative = "good".
-#         # If we don't do this, gradients are dominated by the raw magnitude of the cost.
-#         cost_std, cost_mean = torch.std_mean(costs)
-#         # Avoid division by zero
-#         normalized_costs = (costs - cost_mean) / (cost_std + 1e-8)
-        
-#         # If minimizing, we want to push probability UP for low costs (negative normalized values)
-#         # and DOWN for high costs (positive normalized values).
-#         if model.modelSense != EPO.MINIMIZE:
-#             normalized_costs = -normalized_costs
-
-#     # 3. Calculate Expected Risk
-#     # We detach costs because we only differentiate with respect to weights (p)
-#     loss = (weights * normalized_costs).sum()
-    
-#     return loss

@@ -7,13 +7,12 @@ Abstract optimization model based on Pyomo
 from copy import copy
 import torch
 import numpy as np
-from pyepo.model.opt import optModel
-from pyepo import EPO
-
 
 try:
     from pyomo import opt as po
     from pyomo import environ as pe
+    from pyepo import EPO
+    from pyepo.model.opt import optModel
     _HAS_PYOMO = True
 except ImportError:
     _HAS_PYOMO = False
