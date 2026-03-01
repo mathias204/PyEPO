@@ -1,4 +1,7 @@
 import copy
+from pyepo.predictive.pred import PredictivePrescription
+from pyepo import EPO
+from pyepo.model.opt import optModel
 
 class EarlyStopper:
     def __init__(self, patience=1, min_delta=0):
@@ -22,3 +25,26 @@ class EarlyStopper:
                     model.load_state_dict(self.best_state_dict)
                 return True  # stop training
             return False    
+
+def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_test, c_test):
+    # TODO: can be made a little more efficient by batching, only setting objective and solving can't be batched
+    loss = 0
+    optsum = 0
+
+    for x, true_cost in zip(x_test, c_test):
+
+        pred_sol, _ = prediction_model.optimize(x)
+
+        opt_model.setObj(true_cost)
+        _, true_obj = opt_model.solve()
+
+        pred_obj = opt_model.cal_obj(true_cost, pred_sol)
+
+        if opt_model.modelSense == EPO.MINIMIZE:
+            loss += pred_obj - true_obj
+        if opt_model.modelSense == EPO.MAXIMIZE:
+            loss += true_obj - pred_obj
+
+        optsum += abs(true_obj)
+
+    return loss/(optsum + 1e-7)

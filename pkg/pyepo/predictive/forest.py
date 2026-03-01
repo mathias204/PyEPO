@@ -14,12 +14,15 @@ class RandomForestPrescription(PredictivePrescription):
         # optimize model parameters automatically
         self.weigth_model = self._optimize_model()
 
-    def _get_weights(self, x):
-        T = len(self.weigth_model.estimators_)
+    def _get_weights(self, x, weight_model=None):
+        if weight_model is None:
+            weight_model = self.weigth_model
+
+        T = len(weight_model.estimators_)
         N = len(self.features)
         weights = np.zeros(N)
 
-        for tree in self.weigth_model.estimators_:
+        for tree in weight_model.estimators_:
             leaf_x = tree.apply([x])[0]
             leaf_train = tree.apply(self.features)
             same_leaf = (leaf_train == leaf_x)
@@ -45,23 +48,28 @@ class RandomForestPrescription(PredictivePrescription):
         for n_est in n_estimators_list:
             for depth in max_depth_list:
             # for min_leaf in min_samples_leaf_list:
-                model = RandomForestRegressor(
+                rf_model = RandomForestRegressor(
                     n_estimators=n_est,
                     max_depth=depth,
                     # min_samples_leaf=min_leaf,
                     random_state=self.random_state,
                     n_jobs=-1,
                 )
-                model.fit(X_train, y_train)
-                preds = model.predict(X_val)
-
+                rf_model.fit(X_train, y_train)
+                
                 loss = 0
                 optsum = 0
-                for pred, true_cost in zip(preds, y_val):
+                for x, true_cost in zip(X_val, y_val):
+                    weights = self._get_weights(x, weight_model=rf_model)
+
+                    self.model.setWeightObj(weights, self.costs) #TODO: maybe this is data leakage => look into later
+                    
+                    sol, _ = self.model.solve()
+                    
                     self.model.setObj(true_cost)
                     _, true_obj = self.model.solve()
 
-                    pred_obj = self.model.cal_obj(true_cost, pred)
+                    pred_obj = self.model.cal_obj(true_cost, sol)
 
                     if self.model.modelSense == EPO.MINIMIZE:
                         loss += pred_obj - true_obj
