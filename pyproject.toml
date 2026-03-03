@@ -1,0 +1,31 @@
+[project]
+name = "pyepo"
+version = "1.0.3"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "scipy",
+    "pathos",
+    "tqdm",
+    "configspace",
+    "scikit-learn",
+    "torch>=1.13",
+    "matplotlib>=3.10.8",
+]
+
+[project.optional-dependencies]
+gurobi = ["gurobipy>=9.1.2"]
+pyomo = ["pyomo>=6.1.2"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyepo"]
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "pkg"}
+
+[tool.setuptools.packages.find]
+where = ["pkg"]
