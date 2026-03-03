@@ -9,13 +9,12 @@ import numpy as np
 import time as time
 from pyepo import EPO
 from enum import Enum
-
-from pyepo.func.surrogate import SFGE
-from pyepo.func.surrogate import SPOPlus
+from pyepo.func.surrogate import SFGE, novel, SPOPlus
 
 class LossType(Enum):
     SFGE = 1
     SPO = 2
+    NOVEL = 3
 
 class NeuralPrediction(PredictivePrescription):
 
@@ -68,6 +67,10 @@ class NeuralPrediction(PredictivePrescription):
             regret = true_objs_np - realised_obj
 
         return regret
+    
+    def _novel_loss(self, weights, costs, true_objs, data_sols):
+        loss = novel(weights, costs, true_objs, data_sols, self.model)
+        return loss
     
     def _sfge_loss(self, weights, costs, true_objs, data_sols, S) -> torch.Tensor:
         loss = SFGE(weights, costs, true_objs, data_sols, self.model, S)
@@ -130,13 +133,18 @@ class NeuralPrediction(PredictivePrescription):
                     loss = self._sfge_loss(weights, c, y_obj, data_sols, S)
                 elif loss_type == LossType.SPO:
                     loss = self._spo_loss(spo_plus, weights, data_costs, c, y_sol, y_obj)
-
+                elif loss_type == LossType.NOVEL:
+                    loss = self._novel_loss(weights, c, y_obj, data_sols)
+                else:
+                    raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
                 # backward pass
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
                 train_loss += loss.item() * -1
+
+
                 opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
 
             train_loss = train_loss / len(train_loader)
@@ -167,6 +175,10 @@ class NeuralPrediction(PredictivePrescription):
                         val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1
                     elif loss_type == LossType.SPO:
                         val_loss += self._spo_loss(spo_plus, weights, costs_full_data, c, y_sol, y_obj).item()
+                    elif loss_type == LossType.NOVEL:
+                        val_loss += self._novel_loss(weights, c, y_obj, sols).item()
+                    else:
+                        raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
 
                 if calc_regret:
                     regret_loss = regret_loss / opt_sum
@@ -178,4 +190,7 @@ class NeuralPrediction(PredictivePrescription):
                 if self.verbose:
                     print(f"Early stopping at epoch {epoch+1}. Restored best weights.")
                 break
+
+            if epoch == epochs - 1:
+                print(f"Finished training for {epochs} epochs. Restoring best weights.")
 

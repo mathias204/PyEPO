@@ -148,11 +148,12 @@ class portfolioModel(optOmoModel):
         return obj
     
 
-n_datapoints = np.linspace(10,750,20).astype(int)
+n_datapoints = np.linspace(10,400,15).astype(int)
 
 nearest_neigbor_regrets = np.zeros(len(n_datapoints))
 neural_regrets_SFGE = np.zeros(len(n_datapoints))
 rf_regrets = np.zeros(len(n_datapoints))
+neural_regrets_NOVEL = np.zeros(len(n_datapoints))
 
 m = 50 # number of assets
 p = 4 # feature dimention
@@ -171,17 +172,23 @@ for idx, num_data in enumerate(n_datapoints):
     neural_predictor_SFGE = NeuralPrediction(x_train, c_train, weight_model, optmodel)
     neural_predictor_SFGE.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.SFGE)
 
+    weight_model = weigth_prediction(x_train.shape[1])
+    neural_predictor_NOVEL = NeuralPrediction(x_train, c_train, weight_model, optmodel)
+    neural_predictor_NOVEL.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.NOVEL)
+
     rf_predictor = RandomForestPrescription(x_train, c_train, optmodel)
 
     #Run tests
     nearest_neigbor_regrets[idx] = test_model(nearest_neigbor_predictor, optmodel, x_test, c_test)
     neural_regrets_SFGE[idx] = test_model(neural_predictor_SFGE, optmodel, x_test, c_test)
+    neural_regrets_NOVEL[idx] = test_model(neural_predictor_NOVEL, optmodel, x_test, c_test)
     rf_regrets[idx] = test_model(rf_predictor, optmodel, x_test, c_test)
 
 
 plt.figure(figsize=(10, 6))
 plt.plot(n_datapoints, nearest_neigbor_regrets, label='Nearest Neighbor')
 plt.plot(n_datapoints, neural_regrets_SFGE, label='Neural Network - SFGE')
+plt.plot(n_datapoints, neural_regrets_NOVEL, label='Neural Network - NOVEL')
 plt.plot(n_datapoints, rf_regrets, label='Random Forest')
 plt.xlabel('Number of Data Points')
 plt.ylabel('Regret')
