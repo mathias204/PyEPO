@@ -111,6 +111,7 @@ class knapSackModel(optGrbModel):
 numbers_data = np.linspace(10,750,20).astype(int)
 
 nearest_neigbor_regrets = np.zeros(len(numbers_data))
+neural_regrets_NOVEL = np.zeros(len(numbers_data))
 neural_regrets_SFGE = np.zeros(len(numbers_data))
 neural_regrets_SPO = np.zeros(len(numbers_data))
 rf_regrets = np.zeros(len(numbers_data))
@@ -132,6 +133,10 @@ for idx, num_data in enumerate(numbers_data):
     neural_predictor_SFGE.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.SFGE)
 
     weight_model = weigth_prediction(x_train.shape[1])
+    neural_predictor_NOVEL = NeuralPrediction(x_train, c_train, weight_model, optmodel)
+    neural_predictor_NOVEL.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.NOVEL)
+
+    weight_model = weigth_prediction(x_train.shape[1])
     neural_predictor_SPO = NeuralPrediction(x_train, c_train, weight_model, optmodel)
     neural_predictor_SPO.train_model(epochs=500, loss_type=pyepo.predictive.neural.LossType.SPO)
 
@@ -140,6 +145,7 @@ for idx, num_data in enumerate(numbers_data):
     #Run tests
     nearest_neigbor_regrets[idx] = test_model(nearest_neigbor_predictor, optmodel, x_test, c_test)
     neural_regrets_SFGE[idx] = test_model(neural_predictor_SFGE, optmodel, x_test, c_test)
+    neural_regrets_NOVEL[idx] = test_model(neural_predictor_NOVEL, optmodel, x_test, c_test)
     neural_regrets_SPO[idx] = test_model(neural_predictor_SPO, optmodel, x_test, c_test)
     rf_regrets[idx] = test_model(rf_predictor, optmodel, x_test, c_test)
 
@@ -147,6 +153,7 @@ for idx, num_data in enumerate(numbers_data):
 plt.figure(figsize=(10, 6))
 plt.plot(numbers_data, nearest_neigbor_regrets, label='Nearest Neighbor')
 plt.plot(numbers_data, neural_regrets_SFGE, label='Neural Network - SFGE')
+plt.plot(numbers_data, neural_regrets_NOVEL, label='Neural Network - NOVEL')
 plt.plot(numbers_data, neural_regrets_SPO, label='Neural Network - SPO')
 plt.plot(numbers_data, rf_regrets, label='Random Forest')
 plt.xlabel('Number of Data Points')
