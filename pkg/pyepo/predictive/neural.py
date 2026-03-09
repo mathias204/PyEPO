@@ -193,4 +193,6 @@ class NeuralPrediction(PredictivePrescription):
 
             if epoch == epochs - 1:
                 print(f"Finished training for {epochs} epochs. Restoring best weights.")
+        
+        self.weight_model.eval()
 
