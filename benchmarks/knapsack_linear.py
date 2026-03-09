@@ -9,7 +9,7 @@ from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 
 # Weight model
-class weigth_prediction(nn.Module):
+class WeightModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=32):
         super().__init__()
         self.net = nn.Sequential(
@@ -114,7 +114,7 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 15).astype(int)
+    sizes = np.linspace(10, 350, 5).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -122,11 +122,11 @@ if __name__ == "__main__":
     )
 
     # Register models to benchmark
-    pipeline.add_baseline('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
-    pipeline.add_baseline('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
-    pipeline.add_neural_model('Neural Network SFGE', pyepo.predictive.neural.LossType.SFGE, epochs=1000)
-    pipeline.add_neural_model('Neural Network NOVEL', pyepo.predictive.neural.LossType.NOVEL, epochs=1000)
-    pipeline.add_neural_model('Neural Network SPO', pyepo.predictive.neural.LossType.SPO, epochs=500)
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
+    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
+    pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, epochs=500, weight_model = WeightModel)
 
     # Run and plot
     pipeline.execute()
