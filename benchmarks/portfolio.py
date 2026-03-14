@@ -9,13 +9,14 @@ from pyepo import EPO
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 
-
-# Weight model
 class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=32):
+    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
+            nn.Dropout(dropout),
             nn.Linear(input_dim*2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
@@ -152,7 +153,7 @@ def portoflion_generator_factory(m=50, p = 4, deg=4, e=1):
     return generator
     
 if __name__ == "__main__":
-    sizes = np.linspace(10, 400, 5).astype(int)
+    sizes = np.linspace(10, 400, 15).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -162,9 +163,10 @@ if __name__ == "__main__":
     # Register models to benchmark
     pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
     pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
-    pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
     pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, epochs=1000, weight_model = WeightModel)
 
     # Run and plot
     pipeline.execute()
     pipeline.plot_results('results/portfolio_regret.png', 'Portfolio Benchmark Regret')
+    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/portfolio_barchart.png', 'Portfolio Benchmark Barchart')

@@ -29,7 +29,7 @@ class RandomForestPrescription(PredictivePrescription):
             idx = np.where(same_leaf)[0]
             if len(idx) > 0:
                 weights[idx] += 1.0 / (T * len(idx))
-        return weights / np.sum(weights)
+        return weights
 
     def _optimize_model(self):
         # split for validation
@@ -62,7 +62,7 @@ class RandomForestPrescription(PredictivePrescription):
                 for x, true_cost in zip(X_val, y_val):
                     weights = self._get_weights(x, weight_model=rf_model)
 
-                    self.model.setWeightObj(weights, self.costs) #TODO: maybe this is data leakage => look into later
+                    self.model.setWeightObj(weights, self.costs)
                     
                     sol, _ = self.model.solve()
                     

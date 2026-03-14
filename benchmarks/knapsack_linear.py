@@ -10,10 +10,13 @@ from pyepo.predictive.utils import WeightingTypeFunction
 
 # Weight model
 class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=32):
+    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
+            nn.Dropout(dropout),
             nn.Linear(input_dim*2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
@@ -36,7 +39,7 @@ class WeightModel(nn.Module):
         weights = self.net(inp).squeeze(-1)
         weights = torch.softmax(weights, dim=1)
         return weights
-    
+
 
 # optimization model
 class knapSackModel(optGrbModel):
@@ -114,20 +117,23 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 5).astype(int)
+    sizes = np.linspace(10, 350, 15).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
-        data_generator=knapsack_generator_factory()
+        data_generator=knapsack_generator_factory(),
+        num_runs=10
     )
 
     # Register models to benchmark
     pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
     pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
-    pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, epochs=500, weight_model = WeightModel)
+    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
 
     # Run and plot
+    print(sizes[7])
     pipeline.execute()
     pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
+    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/knapsack_barchart.png', 'Knapsack Benchmark Barchart')
