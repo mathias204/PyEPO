@@ -4,11 +4,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from pyepo.data.dataset import optDatasetPP
-from pyepo.predictive.utils import EarlyStopper
 import numpy as np
 import time as time
 from pyepo import EPO
 from enum import Enum
+import copy
 from pyepo.func.surrogate import SFGE, novel, SPOPlus
 
 class LossType(Enum):
@@ -18,12 +18,12 @@ class LossType(Enum):
 
 class NeuralPrediction(PredictivePrescription):
 
-    def __init__(self, feats, costs, weight_model, model, verbose = False):
+    def __init__(self, feats, costs, model, weight_model, verbose = False):
+        super().__init__(model)
         self.features = feats
         self.costs = costs
         self.weight_model: nn.Module = weight_model
         self.verbose = verbose
-        super().__init__(model)
 
     def _get_weights(self, x, features=None):
         if features is None:
@@ -143,7 +143,7 @@ class NeuralPrediction(PredictivePrescription):
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * -1
+                train_loss += loss.item() * -1  #TODO: is this -1 correct?
 
 
                 opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
@@ -173,7 +173,7 @@ class NeuralPrediction(PredictivePrescription):
                         regret_loss += np.sum(regret).item()
 
                     if loss_type == LossType.SFGE:
-                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1
+                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1 #TODO: is this -1 correct
                     elif loss_type == LossType.SPO:
                         val_loss += self._spo_loss(spo_plus, weights, costs_full_data, c, y_sol, y_obj).item()
                     elif loss_type == LossType.NOVEL:
@@ -199,3 +199,30 @@ class NeuralPrediction(PredictivePrescription):
         
         self.weight_model.eval()
 
+        return val_loss
+
+
+
+
+class EarlyStopper:
+    def __init__(self, patience=1, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = float('inf')
+        self.best_state_dict = None
+
+    def step(self, validation_loss, model):
+        if validation_loss < self.min_validation_loss - self.min_delta:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+            self.best_state_dict = copy.deepcopy(model.state_dict())
+            return False 
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                # restore best weights and stop
+                if self.best_state_dict is not None:
+                    model.load_state_dict(self.best_state_dict)
+                return True  # stop training
+            return False   

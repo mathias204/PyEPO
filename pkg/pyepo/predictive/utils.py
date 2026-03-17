@@ -1,8 +1,11 @@
-import copy
 from pyepo.predictive.pred import PredictivePrescription
+from pyepo.predictive.neural import  NeuralPrediction
 from pyepo import EPO
 from pyepo.model.opt import optModel
 from enum import Enum
+import itertools
+from sklearn.model_selection import train_test_split
+import numpy as np
 
 class WeightingTypeFunction(Enum):
     NEURAL = "neural"
@@ -12,30 +15,7 @@ class WeightingTypeFunction(Enum):
     KERNEL = "kernel"
     RKERNEL = "rkernel"
     CART = "cart"
-    SAA = "saa"
-
-class EarlyStopper:
-    def __init__(self, patience=1, min_delta=0):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.min_validation_loss = float('inf')
-        self.best_state_dict = None
-
-    def step(self, validation_loss, model):
-        if validation_loss < self.min_validation_loss - self.min_delta:
-            self.min_validation_loss = validation_loss
-            self.counter = 0
-            self.best_state_dict = copy.deepcopy(model.state_dict())
-            return False 
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                # restore best weights and stop
-                if self.best_state_dict is not None:
-                    model.load_state_dict(self.best_state_dict)
-                return True  # stop training
-            return False    
+    SAA = "saa" 
 
 def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_test, c_test):
     # TODO: can be made a little more efficient by batching, only setting objective and solving can't be batched
@@ -52,10 +32,104 @@ def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_
         pred_obj = opt_model.cal_obj(true_cost, pred_sol)
 
         if opt_model.modelSense == EPO.MINIMIZE:
-            loss += (pred_obj - true_obj)/true_obj
+            loss += (pred_obj - true_obj)
         if opt_model.modelSense == EPO.MAXIMIZE:
-            loss += (true_obj - pred_obj)/true_obj
+            loss += (true_obj - pred_obj)
 
-        # optsum += abs(true_obj)
+        optsum += abs(true_obj)
 
-    return loss / len(x_test)
+    return loss
+
+
+def finetune_predictive_prescription(
+    model_cls: PredictivePrescription,
+    feats,
+    costs,
+    optmodel,
+    param_grid,
+    test_size=0.2,
+    random_state=None,
+    model_kwargs=None,
+):
+    x_train, x_val, c_train, c_val = train_test_split(
+        feats, costs, test_size=test_size, random_state=random_state
+    )
+
+    if model_kwargs is None:
+        model_kwargs = {}
+
+    best_score = np.inf
+    best_params = None
+
+    keys = list(param_grid.keys())
+    values = list(param_grid.values())
+
+    for combination in itertools.product(*values):
+        params = dict(zip(keys, combination))
+
+        model = model_cls(
+            x_train,
+            c_train,
+            optmodel,
+            **params,
+            **model_kwargs,
+        )
+
+        score = test_model(model, optmodel, x_val, c_val)
+
+        if score < best_score:
+            best_score = score
+            best_params = params
+
+    return model_cls(feats, costs, optmodel, **best_params, **model_kwargs)
+
+def finetune_neural_prescription(
+    feats,
+    costs,
+    optmodel,
+    weight_model_class,
+    arch_param_grid,
+    train_param_grid,
+    loss_type
+):
+
+    best_score = np.inf
+    best_params = None
+    best_model = None
+
+    arch_keys = list(arch_param_grid.keys())
+    arch_vals = list(arch_param_grid.values())
+
+    train_keys = list(train_param_grid.keys())
+    train_vals = list(train_param_grid.values())
+
+    for arch_combo in itertools.product(*arch_vals):
+        arch_params = dict(zip(arch_keys, arch_combo))
+
+        for train_combo in itertools.product(*train_vals):
+            train_params = dict(zip(train_keys, train_combo))
+
+            weight_model = weight_model_class(
+                feats.shape[1],
+                **arch_params
+            )
+
+            predictor = NeuralPrediction(
+                feats,
+                costs,
+                optmodel,
+                weight_model,
+            )
+
+            val_loss = predictor.train_model(
+                loss_type=loss_type,
+                **train_params
+            )
+
+            if val_loss < best_score:
+                best_score = val_loss
+                best_params = {**arch_params, **train_params}
+                best_model = predictor
+
+    print("Best params:", best_params)
+    return best_model
