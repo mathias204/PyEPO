@@ -2,7 +2,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from pyepo.predictive import NeuralPrediction, NearestPrediction, RandomForestPrescription
+from pyepo.predictive import NeuralPrediction, NearestPrediction, RandomForestPrescription, LOESS, KernelPrescription, RecursiveKernelPrescription, CartPrescription, SAA
 from pyepo.predictive.utils import test_model, WeightingTypeFunction
 
 class PredictOptimizePipeline:
@@ -47,6 +47,23 @@ class PredictOptimizePipeline:
             case WeightingTypeFunction.NEAREST_NEIGHBOUR:
                 k = params.get('k')
                 return NearestPrediction(x_train, c_train, k, optmodel)
+            
+            case WeightingTypeFunction.LOESS:
+                k = params.get('k')
+                return LOESS(x_train, c_train, k, optmodel)
+            
+            case WeightingTypeFunction.KERNEL:
+                k = params.get('k')
+                return KernelPrescription(x_train, c_train, k, optmodel)
+            case WeightingTypeFunction.RKERNEL:
+                k = params.get('k')
+                return RecursiveKernelPrescription(x_train, c_train, k, optmodel)
+            
+            case WeightingTypeFunction.CART:
+                return CartPrescription(x_train, c_train, optmodel)
+            
+            case WeightingTypeFunction.SAA:
+                return SAA(x_train, c_train, optmodel)
         
             case WeightingTypeFunction.RANDOM_FOREST:
                 return RandomForestPrescription(x_train, c_train, optmodel)

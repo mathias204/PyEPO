@@ -8,6 +8,11 @@ class WeightingTypeFunction(Enum):
     NEURAL = "neural"
     NEAREST_NEIGHBOUR = "nearest_neighbour"
     RANDOM_FOREST = "random_forest"
+    LOESS = "loess"
+    KERNEL = "kernel"
+    RKERNEL = "rkernel"
+    CART = "cart"
+    SAA = "saa"
 
 class EarlyStopper:
     def __init__(self, patience=1, min_delta=0):

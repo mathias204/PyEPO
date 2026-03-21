@@ -128,13 +128,17 @@ if __name__ == "__main__":
 
     # Register models to benchmark
     pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
+    pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, k=5)
+    pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, k=5)
+    pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, k=5)
     pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
+    pipeline.add_model('CART', WeightingTypeFunction.CART)
+    pipeline.add_model('SAA', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
+    # pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
 
     # Run and plot
-    print(sizes[7])
     pipeline.execute()
     pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
-    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/knapsack_barchart.png', 'Knapsack Benchmark Barchart')
+    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')

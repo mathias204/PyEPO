@@ -39,7 +39,11 @@ class PredictivePrescription(ABC):
                 weights = weights.squeeze(0)
 
             weights = weights.numpy()
-                    
+
+        if not np.isclose(np.sum(weights), 1.0):
+            raise RuntimeError(f"Weights do not sum to 1.0, got sum {np.sum(weights)}")
+                        
+
         # Optimize
         self.model.setWeightObj(weights, self.costs)
         sol, obj = self.model.solve()
