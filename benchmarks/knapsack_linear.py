@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
+from pyepo.predictive import LossType
 
 # Weight model
 class WeightModel(nn.Module):
@@ -126,7 +127,7 @@ if __name__ == "__main__":
     )
 
     # Register models to benchmark
-    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
     pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, k=5)
     pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, k=5)
     pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, k=5)

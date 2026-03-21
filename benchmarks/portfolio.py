@@ -8,6 +8,7 @@ from torch import nn
 from pyepo import EPO
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
+from pyepo.predictive import LossType
 
 class WeightModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
@@ -145,7 +146,7 @@ class portfolioModel(optOmoModel):
 
         return obj
     
-def portoflion_generator_factory(m=50, p = 4, deg=4, e=1):
+def portfolio_generator_factory(m=50, p = 4, deg=4, e=1):
     optmodel = portfolioModel(m, 0.08) 
     def generator(num_data):
         _, x, c = pyepo.data.portfolio.genData(num_data=num_data, num_features=p, num_assets=m, deg=deg, noise_level=e, seed=42)
@@ -157,14 +158,14 @@ if __name__ == "__main__":
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
-        data_generator=portoflion_generator_factory()
+        data_generator=portfolio_generator_factory()
     )
 
     # Register models to benchmark
-    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
     pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
-    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, epochs=1000, weight_model = WeightModel)
+    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=LossType.NOVEL, epochs=1000, weight_model = WeightModel)
 
     # Run and plot
     pipeline.execute()

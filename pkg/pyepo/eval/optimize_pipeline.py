@@ -44,7 +44,7 @@ class PredictOptimizePipeline:
 
         params = config.get('params').copy()
         match config["type"]:
-            case WeightingTypeFunction.NEAREST_NEIGBHOUR:
+            case WeightingTypeFunction.NEAREST_NEIGHBOUR:
                 k = params.get('k')
                 return NearestPrediction(x_train, c_train, k, optmodel)
             
@@ -79,7 +79,7 @@ class PredictOptimizePipeline:
                 return predictor
             
             case _:
-                ValueError(f"Unknown model type {config['type']}")
+                raise ValueError(f"Unknown model type {config['type']}")
 
     def plot_results(self, save_path, title='Regret vs Number of Data Points'):
         """Plots mean regret with shaded area representing standard deviation."""
