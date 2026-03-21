@@ -4,20 +4,20 @@ import numpy as np
 import pyepo
 from pyepo.model.grb import optGrbModel
 import torch
-from pyepo.predictive.neural import NeuralPrediction
 from torch import nn
-from pyepo.predictive.nn import NearestPrediction
-from pyepo.predictive.forest import RandomForestPrescription
-from sklearn.model_selection import train_test_split
-from pyepo.predictive.utils import test_model
-import matplotlib.pyplot as plt
+from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
+from pyepo.predictive.utils import WeightingTypeFunction
+from pyepo.predictive import LossType
 
 # Weight model
-class weigth_prediction(nn.Module):
-    def __init__(self, input_dim, hidden_dim=32):
+class WeightModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
+            nn.Dropout(dropout),
             nn.Linear(input_dim*2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
@@ -40,7 +40,7 @@ class weigth_prediction(nn.Module):
         weights = self.net(inp).squeeze(-1)
         weights = torch.softmax(weights, dim=1)
         return weights
-    
+
 
 # optimization model
 class knapSackModel(optGrbModel):
@@ -107,61 +107,34 @@ class knapSackModel(optGrbModel):
 
         else:
             raise ValueError(f"Unsupported x shape {x.shape}")
-        
-numbers_data = np.linspace(10,750,20).astype(int)
 
-nearest_neigbor_regrets = np.zeros(len(numbers_data))
-neural_regrets_NOVEL = np.zeros(len(numbers_data))
-neural_regrets_SFGE = np.zeros(len(numbers_data))
-neural_regrets_SPO = np.zeros(len(numbers_data))
-rf_regrets = np.zeros(len(numbers_data))
+def knapsack_generator_factory(num_feat=5, num_item=10):
+    def generator(num_data):
+        weights, x, c = pyepo.data.knapsack.genData(
+            num_data, num_feat, num_item, dim=3, deg=4, noise_width=0.5, seed=135
+        )
+        optmodel = knapSackModel(weights)
+        return x, c, optmodel
+    return generator
 
-num_feat = 5 # size of feature
-num_item = 10 # number of items
+if __name__ == "__main__":
+    sizes = np.linspace(10, 350, 15).astype(int)
+    
+    pipeline = PredictOptimizePipeline(
+        data_sizes=sizes, 
+        data_generator=knapsack_generator_factory(),
+        num_runs=10
+    )
 
-for idx, num_data in enumerate(numbers_data):
-    # generate data
-    weights, x, c = pyepo.data.knapsack.genData(num_data, num_feat, num_item,dim=3, deg=4, noise_width=0.5, seed=135)
+    # Register models to benchmark
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
+    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
+    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
 
-    x_train, x_test, c_train, c_test = train_test_split(x, c, test_size=0.2, random_state=42) #This split is not ideal in this scenario
-    optmodel = knapSackModel(weights) 
-
-    nearest_neigbor_predictor = NearestPrediction(x_train, c_train, 5, optmodel)
-
-    weight_model = weigth_prediction(x_train.shape[1])
-    neural_predictor_SFGE = NeuralPrediction(x_train, c_train, weight_model, optmodel)
-    neural_predictor_SFGE.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.SFGE)
-
-    weight_model = weigth_prediction(x_train.shape[1])
-    neural_predictor_NOVEL = NeuralPrediction(x_train, c_train, weight_model, optmodel)
-    neural_predictor_NOVEL.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.NOVEL)
-
-    weight_model = weigth_prediction(x_train.shape[1])
-    neural_predictor_SPO = NeuralPrediction(x_train, c_train, weight_model, optmodel)
-    neural_predictor_SPO.train_model(epochs=500, loss_type=pyepo.predictive.neural.LossType.SPO)
-
-    rf_predictor = RandomForestPrescription(x_train, c_train, optmodel)
-
-    #Run tests
-    nearest_neigbor_regrets[idx] = test_model(nearest_neigbor_predictor, optmodel, x_test, c_test)
-    neural_regrets_SFGE[idx] = test_model(neural_predictor_SFGE, optmodel, x_test, c_test)
-    neural_regrets_NOVEL[idx] = test_model(neural_predictor_NOVEL, optmodel, x_test, c_test)
-    neural_regrets_SPO[idx] = test_model(neural_predictor_SPO, optmodel, x_test, c_test)
-    rf_regrets[idx] = test_model(rf_predictor, optmodel, x_test, c_test)
-
-
-plt.figure(figsize=(10, 6))
-plt.plot(numbers_data, nearest_neigbor_regrets, label='Nearest Neighbor')
-plt.plot(numbers_data, neural_regrets_SFGE, label='Neural Network - SFGE')
-plt.plot(numbers_data, neural_regrets_NOVEL, label='Neural Network - NOVEL')
-plt.plot(numbers_data, neural_regrets_SPO, label='Neural Network - SPO')
-plt.plot(numbers_data, rf_regrets, label='Random Forest')
-plt.xlabel('Number of Data Points')
-plt.ylabel('Regret')
-plt.title('Regret vs Number of Data Points')
-plt.legend()
-plt.grid(True)
-# plt.show()
-
-# save figure in /results
-plt.savefig('results/knapsack_linear_regret.png')
+    # Run and plot
+    print(sizes[7])
+    pipeline.execute()
+    pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
+    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/knapsack_barchart.png', 'Knapsack Benchmark Barchart')

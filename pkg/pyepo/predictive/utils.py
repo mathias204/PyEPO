@@ -2,6 +2,12 @@ import copy
 from pyepo.predictive.pred import PredictivePrescription
 from pyepo import EPO
 from pyepo.model.opt import optModel
+from enum import Enum
+
+class WeightingTypeFunction(Enum):
+    NEURAL = "neural"
+    NEAREST_NEIGHBOUR = "nearest_neighbour"
+    RANDOM_FOREST = "random_forest"
 
 class EarlyStopper:
     def __init__(self, patience=1, min_delta=0):

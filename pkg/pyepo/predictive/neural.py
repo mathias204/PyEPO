@@ -39,8 +39,9 @@ class NeuralPrediction(PredictivePrescription):
         if features.dim() == 2:
             features = features.unsqueeze(0)  # [1, N, D]
 
-        x = x.to(self.weight_model.net[0].weight.device)
-        features = features.to(self.weight_model.net[0].weight.device)
+        device = next(self.weight_model.parameters()).device
+        x = x.to(device)
+        features = features.to(device)
 
         weights = self.weight_model(x, features)
         return weights
@@ -152,7 +153,7 @@ class NeuralPrediction(PredictivePrescription):
             # validation
             self.weight_model.eval()
             with torch.no_grad():
-                val_loss = 0.0
+                val_loss = 0.0  
                 regret_loss = 0.0
                 opt_sum = 0.0
                 for i, data in enumerate(val_loader):
@@ -187,10 +188,14 @@ class NeuralPrediction(PredictivePrescription):
                 print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
             
             if early_stopper.step(val_loss, self.weight_model):
+                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
                 if self.verbose:
                     print(f"Early stopping at epoch {epoch+1}. Restored best weights.")
                 break
 
             if epoch == epochs - 1:
                 print(f"Finished training for {epochs} epochs. Restoring best weights.")
+                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
+        
+        self.weight_model.eval()
 

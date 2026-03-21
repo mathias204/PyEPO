@@ -4,21 +4,20 @@ from pyepo.model.omo import optOmoModel
 # from pyepo.model.grb import optGrbModel
 import pyomo.environ as pyo
 import torch
-from pyepo.predictive.neural import NeuralPrediction
 from torch import nn
-from pyepo.predictive.nn import NearestPrediction
-from pyepo.predictive.forest import RandomForestPrescription
-from sklearn.model_selection import train_test_split
 from pyepo import EPO
-import matplotlib.pyplot as plt
-from pyepo.predictive.utils import test_model
+from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
+from pyepo.predictive.utils import WeightingTypeFunction
+from pyepo.predictive import LossType
 
-# Weight model
-class weigth_prediction(nn.Module):
-    def __init__(self, input_dim, hidden_dim=32):
+class WeightModel(nn.Module):
+    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
+            nn.Dropout(dropout),
             nn.Linear(input_dim*2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
         )
@@ -147,55 +146,28 @@ class portfolioModel(optOmoModel):
 
         return obj
     
+def portfolio_generator_factory(m=50, p = 4, deg=4, e=1):
+    optmodel = portfolioModel(m, 0.08) 
+    def generator(num_data):
+        _, x, c = pyepo.data.portfolio.genData(num_data=num_data, num_features=p, num_assets=m, deg=deg, noise_level=e, seed=42)
+        return x, c,optmodel
+    return generator
+    
+if __name__ == "__main__":
+    sizes = np.linspace(10, 400, 15).astype(int)
+    
+    pipeline = PredictOptimizePipeline(
+        data_sizes=sizes, 
+        data_generator=portfolio_generator_factory()
+    )
 
-n_datapoints = np.linspace(10,400,15).astype(int)
+    # Register models to benchmark
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
+    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
+    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=LossType.NOVEL, epochs=1000, weight_model = WeightModel)
 
-nearest_neigbor_regrets = np.zeros(len(n_datapoints))
-neural_regrets_SFGE = np.zeros(len(n_datapoints))
-rf_regrets = np.zeros(len(n_datapoints))
-neural_regrets_NOVEL = np.zeros(len(n_datapoints))
-
-m = 50 # number of assets
-p = 4 # feature dimention
-deg = 4 # polynomial degree
-e = 1 # noise level
-optmodel = portfolioModel(m, 0.08) 
-
-for idx, num_data in enumerate(n_datapoints):
-    _, x, c = pyepo.data.portfolio.genData(num_data=num_data, num_features=p, num_assets=m, deg=deg, noise_level=e, seed=42)
-
-    x_train, x_test, c_train, c_test = train_test_split(x, c, test_size=0.2, random_state=42)
-
-    nearest_neigbor_predictor = NearestPrediction(x_train, c_train, 5, optmodel)
-
-    weight_model = weigth_prediction(x_train.shape[1])
-    neural_predictor_SFGE = NeuralPrediction(x_train, c_train, weight_model, optmodel)
-    neural_predictor_SFGE.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.SFGE)
-
-    weight_model = weigth_prediction(x_train.shape[1])
-    neural_predictor_NOVEL = NeuralPrediction(x_train, c_train, weight_model, optmodel)
-    neural_predictor_NOVEL.train_model(epochs=1000, loss_type=pyepo.predictive.neural.LossType.NOVEL)
-
-    rf_predictor = RandomForestPrescription(x_train, c_train, optmodel)
-
-    #Run tests
-    nearest_neigbor_regrets[idx] = test_model(nearest_neigbor_predictor, optmodel, x_test, c_test)
-    neural_regrets_SFGE[idx] = test_model(neural_predictor_SFGE, optmodel, x_test, c_test)
-    neural_regrets_NOVEL[idx] = test_model(neural_predictor_NOVEL, optmodel, x_test, c_test)
-    rf_regrets[idx] = test_model(rf_predictor, optmodel, x_test, c_test)
-
-
-plt.figure(figsize=(10, 6))
-plt.plot(n_datapoints, nearest_neigbor_regrets, label='Nearest Neighbor')
-plt.plot(n_datapoints, neural_regrets_SFGE, label='Neural Network - SFGE')
-plt.plot(n_datapoints, neural_regrets_NOVEL, label='Neural Network - NOVEL')
-plt.plot(n_datapoints, rf_regrets, label='Random Forest')
-plt.xlabel('Number of Data Points')
-plt.ylabel('Regret')
-plt.title('Regret vs Number of Data Points')
-plt.legend()
-plt.grid(True)
-# plt.show()
-
-# save figure in /results
-plt.savefig('results/portfolio_regret.png')
+    # Run and plot
+    pipeline.execute()
+    pipeline.plot_results('results/portfolio_regret.png', 'Portfolio Benchmark Regret')
+    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/portfolio_barchart.png', 'Portfolio Benchmark Barchart')
