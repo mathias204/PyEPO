@@ -155,7 +155,7 @@ if __name__ == "__main__":
     }
 
     # Register models to benchmark
-    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, param_grid = k_param_grid)
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
     pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
     pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
     pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)

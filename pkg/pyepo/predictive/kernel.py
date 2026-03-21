@@ -70,10 +70,10 @@ class RecursiveKernelPrescription(KernelPrescription):
     def __init__(self, feats, costs, model, k, kernel, random_state=None):
         super().__init__(feats, costs, model, k, kernel, random_state)
 
-        pairwise_dists = distance.cdist(feats, feats, metric="euclidean")
+        pairwise_dists = distance.cdist(self.features, self.features, metric="euclidean")
         np.fill_diagonal(pairwise_dists, np.inf)
         pairwise_dists = pairwise_dists
-        self._h_i = np.partition(pairwise_dists, k - 1, axis=1)[:, k - 1]
+        self._h_i = np.partition(pairwise_dists, self.k - 1, axis=1)[:, self.k - 1]
 
     def _get_weights(self, x):
         dists = distance.cdist(self.features, self.features, metric="euclidean")
