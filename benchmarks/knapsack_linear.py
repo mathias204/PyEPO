@@ -119,6 +119,7 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
 
 if __name__ == "__main__":
     sizes = np.linspace(10, 350, 15).astype(int)
+    
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
         data_generator=knapsack_generator_factory(),

@@ -44,17 +44,36 @@ class KernelPrescription(PredictivePrescription):
         h_N = np.partition(dists, self.k - 1)[self.k - 1]
         h_N *= (1 + 1e-8) # Otherwise if k = 1, no points are within the bandwith
 
+
+        if h_N == 0:
+            zero_mask = (dists == 0)
+            count_zero = np.count_nonzero(zero_mask)
+            if count_zero > 0:
+                return zero_mask.astype(float) / float(count_zero)
+            # Defensive fallback: no positive bandwidth and no exact matches.
+            return np.ones(len(self.features), dtype=float) / float(len(self.features))
+
+
         delta_x = self.features - x
 
         kernel_outputs = self.kernel(delta_x / h_N)
         kernel_sum = np.sum(kernel_outputs)
 
-        return kernel_outputs.astype(float) / kernel_sum
+        if kernel_sum > 0:
+            return kernel_outputs.astype(float) / kernel_sum
+        
+        # If the kernel assigns zero mass everywhere, fall back to global uniform weights.
+        return np.ones(len(self.features), dtype=float) / float(len(self.features))
 
 
 class RecursiveKernelPrescription(KernelPrescription):
     def __init__(self, feats, costs, model, k, kernel, random_state=None):
         super().__init__(feats, costs, model, k, kernel, random_state)
+
+        pairwise_dists = distance.cdist(feats, feats, metric="euclidean")
+        np.fill_diagonal(pairwise_dists, np.inf)
+        pairwise_dists = pairwise_dists
+        self._h_i = np.partition(pairwise_dists, k - 1, axis=1)[:, k - 1]
 
     def _get_weights(self, x):
         dists = distance.cdist(self.features, self.features, metric="euclidean")
@@ -73,3 +92,4 @@ class RecursiveKernelPrescription(KernelPrescription):
             return kernel_outputs.astype(float) / kernel_sum
 
         return np.ones(len(self.features), dtype=float) / len(self.features)
+

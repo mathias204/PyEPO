@@ -9,7 +9,7 @@ import numpy as np
 
 class WeightingTypeFunction(Enum):
     NEURAL = "neural"
-    NEAREST_NEIGBHOUR = "nearest_neighbour"
+    NEAREST_NEIGHBOUR = "nearest_neighbour"
     RANDOM_FOREST = "random_forest"
     LOESS = "loess"
     KERNEL = "kernel"

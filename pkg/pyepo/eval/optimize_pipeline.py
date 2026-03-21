@@ -44,7 +44,7 @@ class PredictOptimizePipeline:
 
         params = config.get('params').copy()
         match config["type"]:
-            case WeightingTypeFunction.NEAREST_NEIGBHOUR:
+            case WeightingTypeFunction.NEAREST_NEIGHBOUR:
                 param_grid = params.get('param_grid')
                 return finetune_predictive_prescription(NearestPrediction, x_train, c_train, optmodel, param_grid, test_size=0.11)
             
