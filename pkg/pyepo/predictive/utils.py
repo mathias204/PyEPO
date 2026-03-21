@@ -52,10 +52,10 @@ def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_
         pred_obj = opt_model.cal_obj(true_cost, pred_sol)
 
         if opt_model.modelSense == EPO.MINIMIZE:
-            loss += (pred_obj - true_obj)/true_obj
+            loss += pred_obj - true_obj
         if opt_model.modelSense == EPO.MAXIMIZE:
-            loss += (true_obj - pred_obj)/true_obj
+            loss += true_obj - pred_obj
 
-        # optsum += abs(true_obj)
+        optsum += abs(true_obj)
 
-    return loss / len(x_test)
+    return loss/(optsum + 1e-7)

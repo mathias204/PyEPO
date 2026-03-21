@@ -41,8 +41,7 @@ class PredictivePrescription(ABC):
             weights = weights.numpy()
 
         if not np.isclose(np.sum(weights), 1.0):
-            print(np.sum(weights))
-            raise RuntimeError("Weights do not sum to 1.0")
+            raise RuntimeError(f"Weights do not sum to 1.0, got sum {np.sum(weights)}")
                         
 
         # Optimize

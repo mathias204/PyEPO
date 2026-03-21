@@ -8,8 +8,8 @@ class KernelPrescription(PredictivePrescription):
     def __init__(self, feats, costs, k, model, random_state=None):
         super().__init__(model)
         self.random_state = random_state
-        self.k = k
-        self.kernel = self._optimize_model(feats, costs)
+        self.k = min(k, len(feats)-1) #TODO: see if this -1 can be done, I think mathematically it is not the same
+        self.kernel = self._naive_kernel
 
         # Must be done after _optimize_model
         self.features = feats
@@ -37,71 +37,42 @@ class KernelPrescription(PredictivePrescription):
 
         return results
 
-    def _optimize_model(self, feats, costs):
-        X_train, X_val, y_train, y_val = train_test_split(
-            feats, costs, test_size=0.2, random_state=self.random_state
-        )
-
-        self.features = X_train
-        self.costs = y_train
-
-        kernels = [
-            self._naive_kernel, self._epanechnikov_kernel, self._tricubic_kernel
-        ]
-
-        best_score = np.inf
-        best_kernel = None
-
-        for kernel in kernels:
-            self.kernel = kernel
-
-            loss = 0
-            optsum = 0
-            for x, c in zip(X_val, y_val):
-                sol, obj = self.optimize(x)
-
-                self.model.setObj(c)
-                _, true_obj = self.model.solve()
-                pred_obj = self.model.cal_obj(c, sol)
-
-                if self.model.modelSense == EPO.MINIMIZE:
-                    loss += pred_obj - true_obj
-                if self.model.modelSense == EPO.MAXIMIZE:
-                    loss += true_obj - pred_obj
-
-                optsum += abs(true_obj)
-
-            score = loss / (optsum + 1e-7)
-            if score < best_score:
-                best_score = score
-                best_kernel = kernel
-
-        return best_kernel
-
     def _get_weights(self, x):
         dists = distance.cdist([x], self.features, metric="euclidean").flatten()
         h_N = np.partition(dists, self.k - 1)[self.k - 1]
+        h_N *= (1 + 1e-8) # Otherwise if k = 1, no points are within the bandwith
+
+        if h_N == 0:
+            zero_mask = (dists == 0)
+            count_zero = np.count_nonzero(zero_mask)
+            if count_zero > 0:
+                return zero_mask.astype(float) / float(count_zero)
+            # Defensive fallback: no positive bandwidth and no exact matches.
+            return np.ones(len(self.features), dtype=float) / float(len(self.features))
 
         delta_x = self.features - x
 
         kernel_outputs = self.kernel(delta_x / h_N)
         kernel_sum = np.sum(kernel_outputs)
 
-        return kernel_outputs.astype(float) / kernel_sum
+        if kernel_sum > 0:
+            return kernel_outputs.astype(float) / kernel_sum
+
+        # If the kernel assigns zero mass everywhere, fall back to global uniform weights.
+        return np.ones(len(self.features), dtype=float) / float(len(self.features))
 
 
 class RecursiveKernelPrescription(KernelPrescription):
     def __init__(self, feats, costs, k, model, random_state=None):
+        pairwise_dists = distance.cdist(feats, feats, metric="euclidean")
+        np.fill_diagonal(pairwise_dists, np.inf)
+        pairwise_dists = pairwise_dists
+        self._h_i = np.partition(pairwise_dists, k - 1, axis=1)[:, k - 1]
         super().__init__(feats, costs, k, model, random_state)
 
     def _get_weights(self, x):
-        dists = distance.cdist(self.features, self.features, metric="euclidean")
-        np.fill_diagonal(dists, np.inf)
-
-        h_i = np.partition(dists, self.k - 1, axis=1)[:, self.k - 1]
-
         delta_x = self.features - x
-        scaled = delta_x / h_i[:, None]
+        scaled = delta_x / self._h_i[:, None]
 
         kernel_outputs = self.kernel(scaled)
         kernel_sum = np.sum(kernel_outputs)
