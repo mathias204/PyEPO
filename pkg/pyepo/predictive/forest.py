@@ -9,27 +9,23 @@ class RandomForestPrescription(PredictivePrescription):
         super().__init__(model)
         self.features = feats
         self.costs = costs
-        self.random_state = random_state
 
         rf_model = RandomForestRegressor(
             n_estimators=n_est,
             max_depth=depth,
-            random_state=self.random_state,
+            random_state=random_state,
             n_jobs=-1,
         )
         rf_model.fit(feats, costs)
 
         self.weigth_model = rf_model
 
-    def _get_weights(self, x, weight_model=None):
-        if weight_model is None:
-            weight_model = self.weigth_model
-
-        T = len(weight_model.estimators_)
+    def _get_weights(self, x):
+        T = len(self.weigth_model.estimators_)
         N = len(self.features)
         weights = np.zeros(N)
 
-        for tree in weight_model.estimators_:
+        for tree in self.weigth_model.estimators_:
             leaf_x = tree.apply([x])[0]
             leaf_train = tree.apply(self.features)
             same_leaf = (leaf_train == leaf_x)

@@ -45,37 +45,19 @@ class PredictOptimizePipeline:
         params = config.get('params').copy()
         match config["type"]:
             case WeightingTypeFunction.NEAREST_NEIGBHOUR:
-                param_grid = {      #TODO: these grids can be better outside
-                    "k": [1, 3, 5, 10],
-                }
+                param_grid = params.get('param_grid')
                 return finetune_predictive_prescription(NearestPrediction, x_train, c_train, optmodel, param_grid, test_size=0.11)
             
             case WeightingTypeFunction.LOESS:
-                param_grid = {
-                    "k": [1, 3, 5, 10],
-                }
+                param_grid = params.get('param_grid')
                 return finetune_predictive_prescription(LOESS, x_train, c_train, optmodel, param_grid, test_size=0.11)
             
             case WeightingTypeFunction.KERNEL:
-                param_grid = {
-                    "k": [1, 3, 5, 10],
-                    "kernel" : [
-                        KernelPrescription._naive_kernel,
-                        KernelPrescription._epanechnikov_kernel,
-                        KernelPrescription._tricubic_kernel,
-                    ]
-                }
+                param_grid = params.get('param_grid')
                 return finetune_predictive_prescription(KernelPrescription, x_train, c_train, optmodel, param_grid, test_size=0.11)
             
             case WeightingTypeFunction.RKERNEL:
-                param_grid = {
-                    "k": [1, 3, 5, 10],
-                    "kernel" : [
-                        RecursiveKernelPrescription._naive_kernel,
-                        RecursiveKernelPrescription._epanechnikov_kernel,
-                        RecursiveKernelPrescription._tricubic_kernel,
-                    ]
-                }
+                param_grid = params.get('param_grid')
                 return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, optmodel, param_grid, test_size=0.11)
             
             case WeightingTypeFunction.CART:
@@ -85,36 +67,24 @@ class PredictOptimizePipeline:
                 return SAA(x_train, c_train, optmodel)
         
             case WeightingTypeFunction.RANDOM_FOREST:
-                param_grid = {
-                    "n_est": [50, 100, 200],
-                    "depth": [5, 10, 20, None],
-                }
+                param_grid = params.get('param_grid')
                 return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, optmodel, param_grid, test_size=0.11)
         
             case WeightingTypeFunction.NEURAL:
                 weight_model_class = params.pop('weight_model')
-                epochs = params.pop('epochs') 
                 loss_type = params.pop('loss')
 
+                weight_model_param_grid = params.get("weight_model_param_grid")
 
-                arch_grid = {
-                    "hidden_dim": [32, 64, 128],
-                    "dropout": [0, 0.1]
-                }
-
-                train_grid = {
-                    "epochs": [epochs],
-                    "batch_size": [32, 64],
-                    "lr": [1e-3, 5e-4]
-                }
+                train_param_grid = params.get("train_param_grid")
 
                 return finetune_neural_prescription(
                     x_train,
                     c_train,
                     optmodel,
                     weight_model_class,
-                    arch_grid,
-                    train_grid,
+                    weight_model_param_grid,
+                    train_param_grid,
                     loss_type
                 )
             

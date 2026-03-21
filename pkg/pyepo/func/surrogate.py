@@ -89,9 +89,9 @@ class SPOPlusFunc(Function):
         sol, obj = _solve_or_cache(2 * cp - c, module)
         # calculate loss
         if module.optmodel.modelSense == EPO.MINIMIZE:
-            loss = - obj + 2 *  (cp * w).sum(dim=1) - z.squeeze(dim=-1)
+            loss = - obj + 2 * torch.einsum("bi,bi->b", cp, w) - z.squeeze(dim=-1)
         elif module.optmodel.modelSense == EPO.MAXIMIZE:
-            loss = obj - 2 * (cp * w).sum(dim=1) + z.squeeze(dim=-1)
+            loss = obj - 2 * torch.einsum("bi,bi->b", cp, w) + z.squeeze(dim=-1)
         else:
             raise ValueError("Invalid modelSense. Must be EPO.MINIMIZE or EPO.MAXIMIZE.")
         # save solutions

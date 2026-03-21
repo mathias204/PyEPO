@@ -83,7 +83,7 @@ class NeuralPrediction(PredictivePrescription):
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
 
-    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.2, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
         X_train, X_val, y_train, y_val = train_test_split(
             self.features, self.costs, test_size=val_split, random_state=0
         )
@@ -143,7 +143,7 @@ class NeuralPrediction(PredictivePrescription):
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * -1  #TODO: is this -1 correct?
+                train_loss += loss.item()
 
 
                 opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))

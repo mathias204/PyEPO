@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
+from pyepo.predictive import KernelPrescription, LossType
 
 # Weight model
 class WeightModel(nn.Module):
@@ -118,24 +119,51 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
 
 if __name__ == "__main__":
     sizes = np.linspace(10, 350, 15).astype(int)
-    
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
         data_generator=knapsack_generator_factory(),
         num_runs=10
     )
 
+    k_param_grid = {
+        "k": [1, 3, 5, 10],
+    }
+    kernel_param_grid = {
+        **k_param_grid,
+        "kernel" : [
+            KernelPrescription._naive_kernel,
+            KernelPrescription._epanechnikov_kernel,
+            KernelPrescription._tricubic_kernel,
+        ]
+    }
+
+    rf_param_grid = {
+        "n_est": [50, 100, 200],
+        "depth": [5, 10, 20, None],
+    }
+
+    weight_model_param_grid = {
+        "hidden_dim": [32, 64, 128],
+        "dropout": [0, 0.1]
+    }
+
+    train_param_grid = {
+        "epochs": [1000],
+        "batch_size": [32, 64],
+        "lr": [1e-3, 5e-4],
+    }
+
     # Register models to benchmark
-    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
-    pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, k=5)
-    pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, k=5)
-    pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, k=5)
-    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, param_grid = k_param_grid)
+    pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
     pipeline.add_model('CART', WeightingTypeFunction.CART)
     pipeline.add_model('SAA', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    # pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=LossType.NOVEL, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
+    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
 
     # Run and plot
     pipeline.execute()
