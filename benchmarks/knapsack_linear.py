@@ -7,6 +7,7 @@ import torch
 from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
+from pyepo.predictive import LossType
 
 # Weight model
 class WeightModel(nn.Module):
@@ -126,11 +127,11 @@ if __name__ == "__main__":
     )
 
     # Register models to benchmark
-    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGBHOUR, k=5)
+    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
     pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
 
     # Run and plot
     print(sizes[7])
