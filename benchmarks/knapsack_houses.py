@@ -9,6 +9,8 @@ from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import KernelPrescription, LossType
+from pyepo.data.generate_california_house_price_mapping import generate_california_house_prices_mapping
+from sklearn.preprocessing import StandardScaler
 
 # Weight model
 class WeightModel(nn.Module):
@@ -26,28 +28,33 @@ class WeightModel(nn.Module):
 
     def forward(self, x, features): 
         """
-        x: [B, D] query features
+        x: [B, X, D] query features
         features: [B, N, D] reference features
-        returns: [B, N] normalized weights
+        returns: [B, X, N] normalized weights
         """
         B, N, D = features.shape
+        _, X, _ = x.shape
 
         # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(1).expand(-1, N, -1)        # [B, N, D]
+        x_exp = x.unsqueeze(2).expand(-1, -1, N, -1) # [B, X, N, D]
+
+        feat_exp = features.unsqueeze(1).expand(-1, X, -1, -1)
 
         # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, features], dim=-1)      # [B, N, 2D]
+        inp = torch.cat([x_exp, feat_exp], dim=-1)
 
         weights = self.net(inp).squeeze(-1)
-        weights = torch.softmax(weights, dim=1)
+
+        weights = torch.softmax(weights, dim=-1)
         return weights
 
 
 # optimization model
 class knapSackModel(optGrbModel):
-    def __init__(self, weights):
+    def __init__(self, weights, capacities):
         self.weights = np.array(weights)
-        self.num_item = len(weights[0])
+        self.capacities = np.array(capacities)
+        self.num_item = self.weights.shape[1]
         super().__init__()
 
     def _getModel(self):
@@ -58,9 +65,9 @@ class knapSackModel(optGrbModel):
         # model sense
         m.modelSense = GRB.MAXIMIZE
         # constraints
-        m.addConstr(gp.quicksum([self.weights[0,i] * x[i] for i in range(self.num_item)]) <= 7)
-        m.addConstr(gp.quicksum([self.weights[1,i] * x[i] for i in range(self.num_item)]) <= 8)
-        m.addConstr(gp.quicksum([self.weights[2,i] * x[i] for i in range(self.num_item)]) <= 9)
+        for i in range(self.weights.shape[0]):
+            m.addConstr(gp.quicksum(self.weights[i][j] * x[j] for j in range(self.num_item)) <= self.capacities[i],
+                        name=f"capacity_{i}")
         return m, x
     
     def cal_obj(self, c, x):
@@ -108,12 +115,28 @@ class knapSackModel(optGrbModel):
 
         else:
             raise ValueError(f"Unsupported x shape {x.shape}")
+    
+    def setWeightObj(self, W, c):
+        """
+        Set a weighted objective for predictive prescriptions.
 
-def knapsack_generator_factory(num_feat=5, num_item=10):
+        Args:
+            W (np.ndarray): shape (N,), weights for each sample
+            C (np.ndarray): shape (N, C), cost vectors for each sample
+        """
+        # if c.shape[1] != self.num_cost:
+        #     raise ValueError("Cost vector dimension mismatch.")
+        if c.shape[0] != W.shape[1]:
+            raise ValueError("Weights and costs must have same first dimension.")
+        
+        obj_coefficients = np.dot(W, c)
+
+        self._model.setObjective(self._objective_fun(obj_coefficients))
+
+
+def knapsack_generator_factory(dims=3, num_item=20):
     def generator(num_data):
-        weights, x, c = pyepo.data.knapsack.genData(
-            num_data, num_feat, num_item, dim=3, deg=4, noise_width=0.5, seed=135
-        )
+        x, c = generate_california_house_prices_mapping(num_data, num_item)
 
         x_tmp, x_test, c_tmp, c_test = train_test_split(
             x, c, test_size=0.1, random_state=0 
@@ -123,13 +146,37 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
             x_tmp, c_tmp, test_size=0.11, random_state=0 
         )
 
-        optmodel = knapSackModel(weights)
+        s_scaler = StandardScaler()
+        train_shape = x_train.shape
+        val_shape = x_val.shape
+        test_shape = x_test.shape
+
+        # Reshape to 2D: (samples * timesteps, features)
+        x_train_2d = x_train.reshape(-1, train_shape[-1])
+        x_val_2d = x_val.reshape(-1, val_shape[-1])
+        x_test_2d = x_test.reshape(-1, test_shape[-1])
+
+        # Fit and transform on 2D data
+        x_train_scaled = s_scaler.fit_transform(x_train_2d.astype(np.float64))
+        x_val_scaled = s_scaler.transform(x_val_2d.astype(np.float64))
+        x_test_scaled = s_scaler.transform(x_test_2d.astype(np.float64))
+
+        # Reshape back to 3D
+        x_train = x_train_scaled.reshape(train_shape)
+        x_val = x_val_scaled.reshape(val_shape)
+        x_test = x_test_scaled.reshape(test_shape)
+
+        weights = np.random.randint(1, 10, size=(dims, num_item))
+        capacities = np.array(0.1 * np.sum(weights, axis=1))
+
+        optmodel = knapSackModel(weights, capacities)
+
         return x_train, c_train, x_val, c_val, x_test, c_test, optmodel
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 15).astype(int)
-    sizes = np.linspace(200, 200, 1).astype(int)
+    sizes = np.linspace(4, 200, 20).astype(int)
+    # sizes = np.linspace(200, 200, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -167,10 +214,10 @@ if __name__ == "__main__":
 
     # Register models to benchmark
     pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    # pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
     # pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    # pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
-    # pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+    pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
     # pipeline.add_model('CART', WeightingTypeFunction.CART)
     # pipeline.add_model('SAA', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
@@ -179,5 +226,5 @@ if __name__ == "__main__":
 
     # Run and plot
     pipeline.execute()
-    # pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
-    pipeline.plot_normalized_bar_chart(sizes[0], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
+    pipeline.plot_results('results/knapsack_houses_regret.png', 'Knapsack Houses Benchmark Regret')
+    # pipeline.plot_normalized_bar_chart(sizes[0], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')

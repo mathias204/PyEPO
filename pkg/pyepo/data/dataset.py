@@ -167,6 +167,13 @@ class optDatasetPP(Dataset):
             tuple: optimal solutions (np.ndarray) and objective values (np.ndarray)
         """
         return self.sols, self.objs
+    
+    def get_features_costs(self):
+        if self.feats.ndim == 3:
+            feats = self.feats.reshape(-1, self.feats.shape[-1])
+            costs = self.costs.reshape(-1)
+            return feats, costs
+        return self.feats, self.costs
 
     def _solve(self, cost):
         """
@@ -216,6 +223,10 @@ class optDatasetPP(Dataset):
         mask[index] = False
         X_rest = self.feats[mask]
         C_rest = self.costs[mask]
+
+        if X_rest.ndim == 3:
+            X_rest = X_rest.reshape(-1, X_rest.shape[-1])
+            C_rest = C_rest.reshape(-1) 
 
         return (
             torch.FloatTensor(x_i), 

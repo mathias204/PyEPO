@@ -5,9 +5,7 @@ import numpy as np
 class NearestPrediction(PredictivePrescription):
 
     def __init__(self, feats, costs, model, k):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
+        super().__init__(model, feats, costs)
         self.k = min(k, len(self.features)-1) #TODO: see if this -1 can be done, I think mathematically it is not the same
 
     def _get_weights(self, x):

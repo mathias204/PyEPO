@@ -1,22 +1,17 @@
 from pyepo.predictive.pred import PredictivePrescription
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import train_test_split
-from pyepo import EPO
 
 class RandomForestPrescription(PredictivePrescription):
     def __init__(self, feats, costs, model, n_est, depth, random_state=None):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
-
+        super().__init__(model, feats, costs)
         rf_model = RandomForestRegressor(
             n_estimators=n_est,
             max_depth=depth,
             random_state=random_state,
             n_jobs=-1,
         )
-        rf_model.fit(feats, costs)
+        rf_model.fit(self.features, self.costs)
 
         self.weigth_model = rf_model
 

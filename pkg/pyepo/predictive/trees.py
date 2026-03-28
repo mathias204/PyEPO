@@ -4,9 +4,7 @@ from sklearn import tree
 
 class CartPrescription(PredictivePrescription):
     def __init__(self, feats, costs, model, random_state=None):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
+        super().__init__(model, feats, costs)
         self.random_state = random_state
 
         dtr = tree.DecisionTreeRegressor(random_state=self.random_state)

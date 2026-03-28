@@ -23,7 +23,6 @@ def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_
     optsum = 0
 
     for x, true_cost in zip(x_test, c_test):
-
         pred_sol, _ = prediction_model.optimize(x)
 
         opt_model.setObj(true_cost)
@@ -43,18 +42,14 @@ def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_
 
 def finetune_predictive_prescription(
     model_cls: PredictivePrescription,
-    feats,
-    costs,
+    x_train,
+    c_train,
+    x_val,
+    c_val,
     optmodel,
     param_grid,
-    test_size=0.2,
-    random_state=None,
     model_kwargs=None,
 ):
-    x_train, x_val, c_train, c_val = train_test_split(
-        feats, costs, test_size=test_size, random_state=random_state
-    )
-
     if model_kwargs is None:
         model_kwargs = {}
 
@@ -80,6 +75,9 @@ def finetune_predictive_prescription(
         if score < best_score:
             best_score = score
             best_params = params
+
+    feats = np.concatenate((x_train, x_val), axis=0)
+    costs = np.concatenate((c_train, c_val), axis=0)
 
     return model_cls(feats, costs, optmodel, **best_params, **model_kwargs)
 
@@ -110,7 +108,7 @@ def finetune_neural_prescription(
             train_params = dict(zip(train_keys, train_combo))
 
             weight_model = weight_model_class(
-                feats.shape[1],
+                feats.shape[-1],
                 **arch_params
             )
 

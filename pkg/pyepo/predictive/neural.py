@@ -19,15 +19,36 @@ class LossType(Enum):
 class NeuralPrediction(PredictivePrescription):
 
     def __init__(self, feats, costs, model, weight_model, verbose = False):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
+        super().__init__(model, feats, costs)
         self.weight_model: nn.Module = weight_model
         self.verbose = verbose
+
+    def _get_weights_shared(self, x, features):
+        if not torch.is_tensor(x):
+            x = torch.tensor(x, dtype=torch.float32)
+        if not torch.is_tensor(features):
+            features = torch.tensor(features, dtype=torch.float32)
+
+        if x.dim() == 2:
+            x = x.unsqueeze(0)           # [1, X, D]
+        if features.dim() == 2:
+            features = features.unsqueeze(0)  # [1, N, D]
+
+
+        device = next(self.weight_model.parameters()).device
+        x = x.to(device)
+        features = features.to(device)
+
+        weights = self.weight_model(x, features)
+        return weights
+
 
     def _get_weights(self, x, features=None):
         if features is None:
             features = self.features
+
+        if self.features_unadjusted.ndim == 3:
+            return self._get_weights_shared(x, features)
 
         if not torch.is_tensor(x):
             x = torch.tensor(x, dtype=torch.float32)
@@ -45,6 +66,26 @@ class NeuralPrediction(PredictivePrescription):
 
         weights = self.weight_model(x, features)
         return weights
+    
+    def _optimize_shared(self, x):
+        with torch.no_grad():
+            W = self._get_weights(x)
+            
+            sums = W.sum(dim=-1)
+    
+            if not torch.allclose(sums, torch.ones_like(sums)):
+                raise RuntimeError("Weights do not sum to 1.0 along the N dimension.")
+            
+        W = W.detach().cpu()
+        W = W.squeeze(0)
+        # Optimize
+        self.model.setWeightObj(W, self.costs)
+        sol, obj = self.model.solve()
+
+        if isinstance(sol, torch.Tensor):
+            sol = sol.detach().cpu().numpy()
+
+        return sol, obj
     
     def _calculate_regret(self, weights, costs, true_objs, data_sols):
         preds = []
@@ -78,14 +119,17 @@ class NeuralPrediction(PredictivePrescription):
         return loss
     
     def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
-        y_hat = (weights.unsqueeze(-1) * costs_batch).sum(dim=1)
+        if self.features_unadjusted.ndim == 3:
+            y_hat = torch.einsum('bxn,bn->bx', weights, costs_batch)
+        else:
+            y_hat = (weights.unsqueeze(-1) * costs_batch).sum(dim=1)
 
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
 
     def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
         X_train, X_val, y_train, y_val = train_test_split(
-            self.features, self.costs, test_size=val_split, random_state=0
+            self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=0
         )
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
@@ -104,8 +148,8 @@ class NeuralPrediction(PredictivePrescription):
             batch_size=batch_size, shuffle=False
         )
 
-        feats_full_data = torch.FloatTensor(X_train)
-        costs_full_data = torch.FloatTensor(y_train)
+        feats_full_data = torch.FloatTensor(train_loader.dataset.get_features_costs()[0])
+        costs_full_data = torch.FloatTensor(train_loader.dataset.get_features_costs()[1])
         sols_full_data = torch.FloatTensor(train_loader.dataset.get_sols()[0])
         objs_full_data = torch.FloatTensor(train_loader.dataset.get_sols()[1])
 
@@ -175,7 +219,8 @@ class NeuralPrediction(PredictivePrescription):
                     if loss_type == LossType.SFGE:
                         val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1 #TODO: is this -1 correct
                     elif loss_type == LossType.SPO:
-                        val_loss += self._spo_loss(spo_plus, weights, costs_full_data, c, y_sol, y_obj).item()
+                        costs_full_batch = costs_full_data.unsqueeze(0).expand(x.shape[0], -1)
+                        val_loss += self._spo_loss(spo_plus, weights, costs_full_batch, c, y_sol, y_obj).item()
                     elif loss_type == LossType.NOVEL:
                         val_loss += self._novel_loss(weights, c, y_obj, sols).item()
                     else:

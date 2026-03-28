@@ -6,13 +6,10 @@ from pyepo import EPO
 
 class KernelPrescription(PredictivePrescription):
     def __init__(self, feats, costs, model, k, kernel, random_state=None):
-        super().__init__(model)
+        super().__init__(model, feats, costs)
         self.random_state = random_state
         self.k = min(k, len(feats)-1) #TODO: see if this -1 can be done, I think mathematically it is not the same
         self.kernel = kernel
-
-        self.features = feats
-        self.costs = costs
 
     @staticmethod
     def _naive_kernel(x):
