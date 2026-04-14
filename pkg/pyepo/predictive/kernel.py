@@ -1,14 +1,12 @@
 from pyepo.predictive.pred import PredictivePrescription
 from scipy.spatial import distance
-from sklearn.model_selection import train_test_split
 import numpy as np
-from pyepo import EPO
 
 class KernelPrescription(PredictivePrescription):
     def __init__(self, feats, costs, model, k, kernel, random_state=None):
         super().__init__(model, feats, costs)
         self.random_state = random_state
-        self.k = min(k, len(feats)-1) #TODO: see if this -1 can be done, I think mathematically it is not the same
+        self.k = min(k, len(feats))
         self.kernel = kernel
 
     @staticmethod
@@ -73,14 +71,8 @@ class RecursiveKernelPrescription(KernelPrescription):
         self._h_i = np.partition(pairwise_dists, self.k - 1, axis=1)[:, self.k - 1]
 
     def _get_weights(self, x):
-        dists = distance.cdist(self.features, self.features, metric="euclidean")
-        np.fill_diagonal(dists, np.inf)
-
-        h_i = np.partition(dists, self.k - 1, axis=1)[:, self.k - 1]
-        h_i *= (1 + 1e-8) # Otherwise if k = 1, no points are within the bandwith
-
         delta_x = self.features - x
-        scaled = delta_x / h_i[:, None]
+        scaled = delta_x / self._h_i[:, None]
 
         kernel_outputs = self.kernel(scaled)
         kernel_sum = np.sum(kernel_outputs)

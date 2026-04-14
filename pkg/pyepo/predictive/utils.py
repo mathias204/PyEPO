@@ -1,10 +1,9 @@
 from pyepo.predictive.pred import PredictivePrescription
-from pyepo.predictive.neural import  NeuralPrediction
+from pyepo.predictive.neural import NeuralPrediction
 from pyepo import EPO
 from pyepo.model.opt import optModel
 from enum import Enum
 import itertools
-from sklearn.model_selection import train_test_split
 import numpy as np
 
 class WeightingTypeFunction(Enum):

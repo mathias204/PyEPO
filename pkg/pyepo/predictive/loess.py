@@ -7,7 +7,7 @@ class LOESS(PredictivePrescription):
     def __init__(self, feats, costs, model, k):
         super().__init__(model, feats, costs)
         
-        self.k = min(k, len(self.features)-1) #TODO: see if this -1 can be done, I think mathematically it is not the same
+        self.k = min(k, len(self.features))
 
 
     def _get_weights(self, x):
