@@ -1,5 +1,5 @@
 from pyepo.predictive.pred import PredictivePrescription
-from pyepo.predictive.neural import  NeuralPrediction
+from pyepo.predictive.neural import NeuralPrediction
 from pyepo import EPO
 from pyepo.model.opt import optModel
 from enum import Enum

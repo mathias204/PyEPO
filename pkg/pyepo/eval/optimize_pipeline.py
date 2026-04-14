@@ -263,4 +263,4 @@ class PredictOptimizePipeline:
         plt.xlim(left=0, right=len(x_train))
         plt.tight_layout()
         plt.savefig(save_path)
-        plt.show()
+        plt.close()

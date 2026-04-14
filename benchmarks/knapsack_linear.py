@@ -172,4 +172,4 @@ if __name__ == "__main__":
     pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
     # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
     pipeline.plot_boxplot(sizes[7], 'results/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
-    pipeline.plot_weight_distribution(150, 'results/knapsack_weights', 'Knapsack Weight distribution')
+    pipeline.plot_weight_distribution(150, 'results/knapsack_weights.png', 'Knapsack Weight distribution')

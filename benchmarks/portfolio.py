@@ -206,6 +206,6 @@ if __name__ == "__main__":
 
     # Run and plot
     pipeline.execute()
-    pipeline.plot_results('results/portfolio_regret2.png', 'Portfolio Benchmark Regret')
-    pipeline.plot_boxplot(sizes[2],'results/portfolio_boxplot2.png', "Portfolio Benchmark Boxplot")
-    pipeline.plot_weight_distribution(150, 'results/Portfolio_weights_png', 'Portfolio weight distribution')
+    pipeline.plot_results('results/portfolio_regret.png', 'Portfolio Benchmark Regret')
+    pipeline.plot_boxplot(sizes[2],'results/portfolio_boxplot.png', "Portfolio Benchmark Boxplot")
+    pipeline.plot_weight_distribution(150, 'results/portfolio_weights.png', 'Portfolio weight distribution')

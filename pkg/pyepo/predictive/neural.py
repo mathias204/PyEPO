@@ -137,7 +137,7 @@ class NeuralPrediction(PredictivePrescription):
                 elif loss_type == LossType.DER:
                     loss = self._der_loss(weights, c, y_obj, data_sols)
                 else:
-                    raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
+                    raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.DER.")
                 # backward pass
                 optimizer.zero_grad()
                 loss.backward()
@@ -183,13 +183,13 @@ class NeuralPrediction(PredictivePrescription):
                         regret_loss += np.sum(regret).item()
 
                     if loss_type == LossType.SFGE:
-                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1 #TODO: is this -1 correct
+                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item()
                     elif loss_type == LossType.SPO:
                         val_loss += self._spo_loss(spo_plus, weights, costs_batch, c, y_sol, y_obj).item()
                     elif loss_type == LossType.DER:
                         val_loss += self._der_loss(weights, c, y_obj, sols).item()
                     else:
-                        raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
+                        raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.DER.")
 
                 if calc_regret:
                     regret_loss = regret_loss / opt_sum

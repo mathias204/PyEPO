@@ -247,7 +247,7 @@ def DER(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor, 
     else:
         loss: torch.Tensor = (true_obj - realised_obj) * weights  
 
-    loss /= true_obj
+    loss /= (true_obj + 1e-8)
 
     final_loss = loss.sum()
     return final_loss

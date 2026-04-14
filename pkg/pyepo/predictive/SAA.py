@@ -1,8 +1,5 @@
 from pyepo.predictive.pred import PredictivePrescription
-from scipy.spatial import distance
-from sklearn.model_selection import train_test_split
 import numpy as np
-from pyepo import EPO
 
 
 class SAA(PredictivePrescription):
