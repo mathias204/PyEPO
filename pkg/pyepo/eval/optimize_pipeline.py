@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from pyepo.predictive import NearestPrediction, RandomForestPrescription, LOESS, KernelPrescription, RecursiveKernelPrescription, CartPrescription, SAA
 from pyepo.predictive.utils import test_model, WeightingTypeFunction, finetune_predictive_prescription, finetune_neural_prescription
+import matplotlib.ticker as mtick
+import torch
 
 class PredictOptimizePipeline:
     """Core experimental workflow manager."""
@@ -89,33 +91,33 @@ class PredictOptimizePipeline:
                 )
             
             case _:
-                ValueError(f"Unknown model type {config['type']}")
+                raise ValueError(f"Unknown model type {config['type']}")
 
     def plot_results(self, save_path, title='Regret vs Number of Data Points'):
-        """Plots mean regret with shaded area representing standard deviation."""
+        """Plots mean regret with error bars representing standard deviation."""
         plt.figure(figsize=(10, 6))
         
         for model_name, run_data in self.results.items():
             means = np.mean(run_data, axis=1)
             stds = np.std(run_data, axis=1)
             
-            line = plt.plot(self.data_sizes, means, label=model_name)
-            color = line[0].get_color()
-            
-            # Shaded region for variance
-            plt.fill_between(
+            plt.errorbar(
                 self.data_sizes, 
-                means - stds, 
-                means + stds, 
-                color=color, 
-                alpha=0.2
+                means, 
+                yerr=stds, 
+                label=model_name,
+                fmt='-o',
+                capsize=5
             )
         
         plt.xlabel('Number of Data Points')
-        plt.ylabel('Regret')
+        plt.ylabel('Relative Regret')
         plt.title(title)
         plt.legend()
         plt.grid(True)
+        plt.ylim(bottom=0)
+        plt.xlim(left=0)
+        plt.gca().yaxis.set_major_formatter(mtick.PercentFormatter(xmax=1.0))
         plt.savefig(save_path)
         plt.close()
 
@@ -178,3 +180,87 @@ class PredictOptimizePipeline:
 
         plt.savefig(save_path, dpi=300, bbox_extra_artists=(lgd,), bbox_inches='tight')
         plt.close()
+
+
+    def plot_boxplot(self, target_data_size, save_path, title=None):
+        """Plots a boxplot for relative regret across models for a single dataset size."""
+        if target_data_size not in self.data_sizes:
+            raise ValueError(f"Data size {target_data_size} not found in evaluated sizes.")
+
+        # Identify the index for the requested data size
+        size_idx = np.where(self.data_sizes == target_data_size)[0][0]
+        model_names = list(self.results.keys())
+        
+        data_to_plot = [self.results[name][size_idx, :] * 100 for name in model_names]
+
+        plt.style.use('seaborn-v0_8-darkgrid')
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        box = ax.boxplot(data_to_plot, patch_artist=True, widths=0.6,
+                     medianprops=dict(color='#4d4d4d', linewidth=1.5),
+                     flierprops=dict(marker='d', markersize=4, markerfacecolor='#4d4d4d', alpha=0.8))
+
+
+        colors = ['#4C72B0', '#55A868', '#C44E52', '#8172B2', '#CCB974', '#64B5CD']
+        for patch, color in zip(box['boxes'], colors * (len(model_names) // len(colors) + 1)):
+            patch.set_facecolor(color)
+            patch.set_edgecolor('#4d4d4d')
+            patch.set_alpha(0.9)
+
+        ax.yaxis.set_major_formatter(mtick.PercentFormatter(xmax=100, decimals=0))
+
+        ax.grid(True, axis='y', color='white', linestyle='-', linewidth=1)
+        ax.grid(False, axis='x') # Usually no vertical lines in these plots
+        ax.set_facecolor('#EAEAF2') # Standard seaborn gray
+        
+        ax.set_ylabel('relative regret', fontsize=14)
+        ax.set_xticklabels(model_names, fontsize=14)
+        
+        ax.set_xlabel(f'Models (Data Size: {target_data_size})', fontsize=14, labelpad=10)
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+        if title:
+            plt.title(title, fontsize=16, pad=20)
+
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300)
+        plt.close()
+
+
+    def plot_weight_distribution(self, data_size, save_path, title=None):
+        num_models = len(self.models)
+        fig, axes = plt.subplots(num_models, 1, figsize=(14, 4 * num_models), sharex=True)
+
+        x, c, optmodel = self.data_generator(data_size)
+
+        
+        x_train, x_test, c_train, c_test = train_test_split(x, c, test_size=0.1)
+
+        x_sample = x_test[0]
+
+        for i, (model_name, config) in enumerate(self.models.items()):
+            predictor = self._initialize_and_train(config, x_train, c_train, optmodel)
+
+            weights = predictor._get_weights(x_sample)
+            if isinstance(weights, torch.Tensor):
+                if weights.is_cuda:
+                    weights = weights.detach().cpu().numpy().flatten()
+                else:
+                    weights = weights.detach().numpy().flatten()
+            indices = np.arange(len(weights))
+            axes[i].bar(indices, weights, alpha=0.8, color=plt.cm.viridis(i / num_models))
+            
+            axes[i].set_title(f'Weight Distribution: {model_name}')
+            axes[i].set_ylabel(r'$\omega_i$')
+            
+            axes[i].xaxis.set_major_locator(mtick.MaxNLocator(integer=True, nbins=20))
+            axes[i].grid(axis='y', alpha=0.3, linestyle='--')
+
+
+        plt.xlabel(r'Data Point Index $i$')
+        plt.xlim(left=0, right=len(x_train))
+        plt.tight_layout()
+        plt.savefig(save_path)
+        plt.show()

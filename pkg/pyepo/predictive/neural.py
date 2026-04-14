@@ -9,12 +9,12 @@ import time as time
 from pyepo import EPO
 from enum import Enum
 import copy
-from pyepo.func.surrogate import SFGE, novel, SPOPlus
+from pyepo.func.surrogate import SFGE, DER, SPOPlus
 
 class LossType(Enum):
     SFGE = 1
     SPO = 2
-    NOVEL = 3
+    DER = 3
 
 class NeuralPrediction(PredictivePrescription):
 
@@ -69,8 +69,8 @@ class NeuralPrediction(PredictivePrescription):
 
         return regret
     
-    def _novel_loss(self, weights, costs, true_objs, data_sols):
-        loss = novel(weights, costs, true_objs, data_sols, self.model)
+    def _der_loss(self, weights, costs, true_objs, data_sols):
+        loss = DER(weights, costs, true_objs, data_sols, self.model)
         return loss
     
     def _sfge_loss(self, weights, costs, true_objs, data_sols, S) -> torch.Tensor:
@@ -78,7 +78,7 @@ class NeuralPrediction(PredictivePrescription):
         return loss
     
     def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
-        y_hat = (weights.unsqueeze(-1) * costs_batch).sum(dim=1)
+        y_hat = torch.einsum('bn,bnc->bc', weights, costs_batch)
 
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
@@ -134,8 +134,8 @@ class NeuralPrediction(PredictivePrescription):
                     loss = self._sfge_loss(weights, c, y_obj, data_sols, S)
                 elif loss_type == LossType.SPO:
                     loss = self._spo_loss(spo_plus, weights, data_costs, c, y_sol, y_obj)
-                elif loss_type == LossType.NOVEL:
-                    loss = self._novel_loss(weights, c, y_obj, data_sols)
+                elif loss_type == LossType.DER:
+                    loss = self._der_loss(weights, c, y_obj, data_sols)
                 else:
                     raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
                 # backward pass
@@ -163,8 +163,18 @@ class NeuralPrediction(PredictivePrescription):
                         x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
 
                     feats_batch = feats_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()  # [B, N, D]
+                    costs_batch = costs_full_data.unsqueeze(0).expand(len(x), -1,-1).contiguous()
                     sols = sols_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()
-                    
+
+                    if data_sols.dim() == 2:
+                        data_sols = data_sols.unsqueeze(0)
+                        data_feats = data_feats.unsqueeze(0)
+                        data_costs = data_costs.unsqueeze(0)
+
+                    sols = torch.cat((data_sols, sols), dim=1)
+                    feats_batch = torch.cat((data_feats, feats_batch), dim=1)
+                    costs_batch = torch.cat((data_costs, costs_batch), dim=1)
+                        
                     weights = self._get_weights(x, feats_batch)
 
                     if calc_regret:
@@ -175,9 +185,9 @@ class NeuralPrediction(PredictivePrescription):
                     if loss_type == LossType.SFGE:
                         val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1 #TODO: is this -1 correct
                     elif loss_type == LossType.SPO:
-                        val_loss += self._spo_loss(spo_plus, weights, costs_full_data, c, y_sol, y_obj).item()
-                    elif loss_type == LossType.NOVEL:
-                        val_loss += self._novel_loss(weights, c, y_obj, sols).item()
+                        val_loss += self._spo_loss(spo_plus, weights, costs_batch, c, y_sol, y_obj).item()
+                    elif loss_type == LossType.DER:
+                        val_loss += self._der_loss(weights, c, y_obj, sols).item()
                     else:
                         raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
 
