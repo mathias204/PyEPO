@@ -7,19 +7,19 @@ import torch
 from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
-from pyepo.predictive import LossType
+from pyepo.predictive import KernelPrescription, LossType
 
 # Weight model
 class WeightModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Dropout(dropout),
             nn.Linear(input_dim*2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
+            nn.Dropout(dropout),
         )
         self.softmax = nn.Softmax(dim=1)
 
@@ -126,19 +126,50 @@ if __name__ == "__main__":
         num_runs=10
     )
 
+    k_param_grid = {
+        "k": [1, 3, 5, 10],
+    }
+
+    kernel_param_grid = {
+        **k_param_grid,
+        "kernel" : [
+            KernelPrescription._naive_kernel,
+            KernelPrescription._epanechnikov_kernel,
+            KernelPrescription._tricubic_kernel,
+        ]
+    }
+
+    rf_param_grid = {
+        "n_est": [50, 100, 200],
+        "depth": [5, 10, 20, None],
+    }
+
+    weight_model_param_grid = {
+        "hidden_dim": [32, 64, 128],
+        "dropout": [0, 0.1]
+    }
+
+    train_param_grid = {
+        "epochs": [1000],
+        "batch_size": [32, 64],
+        "lr": [1e-3, 5e-4],
+    }
+
     # Register models to benchmark
-    pipeline.add_model('Nearest Neighbor', WeightingTypeFunction.NEAREST_NEIGHBOUR, k=5)
-    pipeline.add_model('LOESS', WeightingTypeFunction.LOESS, k=5)
-    pipeline.add_model('Kernel', WeightingTypeFunction.KERNEL, k=5)
-    pipeline.add_model('Recursive Kernel', WeightingTypeFunction.RKERNEL, k=5)
-    pipeline.add_model('Random Forest', WeightingTypeFunction.RANDOM_FOREST)
-    pipeline.add_model('CART', WeightingTypeFunction.CART)
-    pipeline.add_model('SAA', WeightingTypeFunction.SAA)
+    pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
+    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    # pipeline.add_model('Neural Network NOVEL',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.NOVEL, dropout =0.0, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model('Neural Network SPO', WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SPO, dropout=0.1, epochs=1000, weight_model = WeightModel)
+    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
 
     # Run and plot
     pipeline.execute()
     pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
-    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
+    # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
+    pipeline.plot_boxplot(sizes[7], 'results/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
+    pipeline.plot_weight_distribution(150, 'results/knapsack_weights.png', 'Knapsack Weight distribution')

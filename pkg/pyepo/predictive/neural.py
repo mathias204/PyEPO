@@ -4,26 +4,26 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from pyepo.data.dataset import optDatasetPP
-from pyepo.predictive.utils import EarlyStopper
 import numpy as np
 import time as time
 from pyepo import EPO
 from enum import Enum
-from pyepo.func.surrogate import SFGE, novel, SPOPlus
+import copy
+from pyepo.func.surrogate import SFGE, DER, SPOPlus
 
 class LossType(Enum):
     SFGE = 1
     SPO = 2
-    NOVEL = 3
+    DER = 3
 
 class NeuralPrediction(PredictivePrescription):
 
-    def __init__(self, feats, costs, weight_model, model, verbose = False):
+    def __init__(self, feats, costs, model, weight_model, verbose = False):
+        super().__init__(model)
         self.features = feats
         self.costs = costs
         self.weight_model: nn.Module = weight_model
         self.verbose = verbose
-        super().__init__(model)
 
     def _get_weights(self, x, features=None):
         if features is None:
@@ -69,8 +69,8 @@ class NeuralPrediction(PredictivePrescription):
 
         return regret
     
-    def _novel_loss(self, weights, costs, true_objs, data_sols):
-        loss = novel(weights, costs, true_objs, data_sols, self.model)
+    def _der_loss(self, weights, costs, true_objs, data_sols):
+        loss = DER(weights, costs, true_objs, data_sols, self.model)
         return loss
     
     def _sfge_loss(self, weights, costs, true_objs, data_sols, S) -> torch.Tensor:
@@ -78,12 +78,12 @@ class NeuralPrediction(PredictivePrescription):
         return loss
     
     def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
-        y_hat = (weights.unsqueeze(-1) * costs_batch).sum(dim=1)
+        y_hat = torch.einsum('bn,bnc->bc', weights, costs_batch)
 
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
 
-    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.2, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
         X_train, X_val, y_train, y_val = train_test_split(
             self.features, self.costs, test_size=val_split, random_state=0
         )
@@ -134,16 +134,16 @@ class NeuralPrediction(PredictivePrescription):
                     loss = self._sfge_loss(weights, c, y_obj, data_sols, S)
                 elif loss_type == LossType.SPO:
                     loss = self._spo_loss(spo_plus, weights, data_costs, c, y_sol, y_obj)
-                elif loss_type == LossType.NOVEL:
-                    loss = self._novel_loss(weights, c, y_obj, data_sols)
+                elif loss_type == LossType.DER:
+                    loss = self._der_loss(weights, c, y_obj, data_sols)
                 else:
-                    raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
+                    raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.DER.")
                 # backward pass
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * -1
+                train_loss += loss.item()
 
 
                 opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
@@ -163,8 +163,18 @@ class NeuralPrediction(PredictivePrescription):
                         x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
 
                     feats_batch = feats_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()  # [B, N, D]
+                    costs_batch = costs_full_data.unsqueeze(0).expand(len(x), -1,-1).contiguous()
                     sols = sols_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()
-                    
+
+                    if data_sols.dim() == 2:
+                        data_sols = data_sols.unsqueeze(0)
+                        data_feats = data_feats.unsqueeze(0)
+                        data_costs = data_costs.unsqueeze(0)
+
+                    sols = torch.cat((data_sols, sols), dim=1)
+                    feats_batch = torch.cat((data_feats, feats_batch), dim=1)
+                    costs_batch = torch.cat((data_costs, costs_batch), dim=1)
+                        
                     weights = self._get_weights(x, feats_batch)
 
                     if calc_regret:
@@ -173,13 +183,13 @@ class NeuralPrediction(PredictivePrescription):
                         regret_loss += np.sum(regret).item()
 
                     if loss_type == LossType.SFGE:
-                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item() * -1
+                        val_loss += self._sfge_loss(weights, c, y_obj, sols, S).item()
                     elif loss_type == LossType.SPO:
-                        val_loss += self._spo_loss(spo_plus, weights, costs_full_data, c, y_sol, y_obj).item()
-                    elif loss_type == LossType.NOVEL:
-                        val_loss += self._novel_loss(weights, c, y_obj, sols).item()
+                        val_loss += self._spo_loss(spo_plus, weights, costs_batch, c, y_sol, y_obj).item()
+                    elif loss_type == LossType.DER:
+                        val_loss += self._der_loss(weights, c, y_obj, sols).item()
                     else:
-                        raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.NOVEL.")
+                        raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.DER.")
 
                 if calc_regret:
                     regret_loss = regret_loss / opt_sum
@@ -199,3 +209,30 @@ class NeuralPrediction(PredictivePrescription):
         
         self.weight_model.eval()
 
+        return val_loss
+
+
+
+
+class EarlyStopper:
+    def __init__(self, patience=1, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = float('inf')
+        self.best_state_dict = None
+
+    def step(self, validation_loss, model):
+        if validation_loss < self.min_validation_loss - self.min_delta:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+            self.best_state_dict = copy.deepcopy(model.state_dict())
+            return False 
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                # restore best weights and stop
+                if self.best_state_dict is not None:
+                    model.load_state_dict(self.best_state_dict)
+                return True  # stop training
+            return False   

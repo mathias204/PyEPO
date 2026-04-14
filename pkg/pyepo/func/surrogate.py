@@ -89,9 +89,9 @@ class SPOPlusFunc(Function):
         sol, obj = _solve_or_cache(2 * cp - c, module)
         # calculate loss
         if module.optmodel.modelSense == EPO.MINIMIZE:
-            loss = - obj + 2 *  (cp * w).sum(dim=1) - z.squeeze(dim=-1)
+            loss = - obj + 2 * torch.einsum("bi,bi->b", cp, w) - z.squeeze(dim=-1)
         elif module.optmodel.modelSense == EPO.MAXIMIZE:
-            loss = obj - 2 * (cp * w).sum(dim=1) + z.squeeze(dim=-1)
+            loss = obj - 2 * torch.einsum("bi,bi->b", cp, w) + z.squeeze(dim=-1)
         else:
             raise ValueError("Invalid modelSense. Must be EPO.MINIMIZE or EPO.MAXIMIZE.")
         # save solutions
@@ -238,7 +238,7 @@ def SFGE(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor,
 
     return loss.mean()
 
-def novel(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor, data_sols:torch.Tensor, model: optModel) -> torch.Tensor:
+def DER(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor, data_sols:torch.Tensor, model: optModel) -> torch.Tensor:
     realised_obj = model.cal_obj(true_cost, data_sols)
     realised_obj = torch.tensor(realised_obj, dtype=torch.float32).to(weights.device)
 
@@ -246,6 +246,8 @@ def novel(weights: torch.Tensor, true_cost: torch.Tensor, true_obj: torch.Tensor
         loss: torch.Tensor =  (realised_obj - true_obj) * weights
     else:
         loss: torch.Tensor = (true_obj - realised_obj) * weights  
+
+    loss /= (true_obj + 1e-8)
 
     final_loss = loss.sum()
     return final_loss
