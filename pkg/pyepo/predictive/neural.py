@@ -3,7 +3,7 @@ from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from pyepo.data.dataset import optDatasetPP
+from pyepo.data.dataset import optDatasetPP, optDatasetSharedPP
 import numpy as np
 import time as time
 from pyepo import EPO
@@ -119,10 +119,7 @@ class NeuralPrediction(PredictivePrescription):
         return loss
     
     def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
-        if self.features_unadjusted.ndim == 3:
-            y_hat = torch.einsum('bxn,bn->bx', weights, costs_batch)
-        else:
-            y_hat = torch.einsum('bn,bnc->bc', weights, costs_batch)
+        y_hat = torch.einsum('bn,bnc->bc', weights, costs_batch)
 
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
@@ -255,6 +252,120 @@ class NeuralPrediction(PredictivePrescription):
 
         return val_loss
 
+
+class GroupedNeuralPrediction(NeuralPrediction):
+    def __init__(self, feats, costs, model, weight_model, verbose = False):
+        super().__init__(feats, costs, model, weight_model, verbose)
+
+
+    def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
+        y_hat = torch.einsum('bxn,bn->bx', weights, costs_batch)
+        return spo_plus(y_hat, true_costs, true_sols, true_objs)   
+
+    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+        X_train, X_val, y_train, y_val = train_test_split(
+            self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=0
+        )
+
+        optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
+
+        spo_plus = SPOPlus(self.model)
+
+        X_train = X_train.reshape(-1, X_train.shape[-1])
+        y_train = y_train.reshape(-1)
+        X_val = X_val.reshape(-1, X_val.shape[-1])
+        y_val = y_val.reshape(-1)
+
+        train_loader = torch.utils.data.DataLoader(
+            optDatasetSharedPP(self.model, X_train, y_train, self.features_unadjusted.shape[1]),
+            batch_size=batch_size, shuffle=True
+        )
+        val_loader = torch.utils.data.DataLoader(
+            optDatasetSharedPP(self.model, X_val, y_val, self.features_unadjusted.shape[1]),
+            batch_size=batch_size, shuffle=False
+        )
+
+        feats_full_data = torch.FloatTensor(train_loader.dataset.get_features_costs()[0])
+        costs_full_data = torch.FloatTensor(train_loader.dataset.get_features_costs()[1])
+
+        if torch.cuda.is_available():
+            feats_full_data = feats_full_data.cuda()
+            costs_full_data = costs_full_data.cuda()
+
+            self.weight_model = self.weight_model.cuda()
+
+        early_stopper = EarlyStopper(5, 0)
+
+        for epoch in range(epochs):
+            self.weight_model.train()
+            train_loss = 0.0
+            opt_sum = 0.0
+            for i, data in enumerate(train_loader):
+                x, c, y_sol, y_obj, data_feats, data_costs = data
+
+                if torch.cuda.is_available():
+                    x, c, y_sol, y_obj, data_feats, data_costs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda()
+                # forward pass
+                weights = self._get_weights(x, data_feats)             # [B, N]
+                if loss_type == LossType.SPO:
+                    loss = self._spo_loss(spo_plus, weights, data_costs, c, y_sol, y_obj)
+                else:
+                    raise ValueError("Invalid loss type. Must be LossType.SPO for grouped prediction.")
+                # backward pass
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+                train_loss += loss.item()
+
+
+                opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
+
+            train_loss = train_loss / len(train_loader)
+
+            # validation
+            self.weight_model.eval()
+            with torch.no_grad():
+                val_loss = 0.0  
+                regret_loss = 0.0
+                opt_sum = 0.0
+                for i, data in enumerate(val_loader):
+                    x, c, y_sol, y_obj, data_feats, data_costs = data
+                    
+                    if torch.cuda.is_available():
+                        x, c, y_sol, y_obj, data_feats, data_costs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda()
+
+                    feats_batch = feats_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()  # [B, N, D]
+                    costs_batch = costs_full_data.unsqueeze(0).expand(len(x), -1).contiguous() 
+
+                    feats_batch = torch.cat((data_feats, feats_batch), dim=1)
+                    costs_batch = torch.cat((data_costs, costs_batch), dim=1)
+                        
+                    weights = self._get_weights(x, feats_batch)
+
+                    if loss_type == LossType.SPO:
+                        val_loss += self._spo_loss(spo_plus, weights, costs_batch, c, y_sol, y_obj).item()
+                    else:
+                        raise ValueError("Invalid loss type. Must be LossType.SPO for grouped prediction.")
+
+                val_loss = val_loss / len(val_loader)
+
+            if self.verbose:
+                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
+            
+            if early_stopper.step(val_loss, self.weight_model):
+                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
+                if self.verbose:
+                    print(f"Early stopping at epoch {epoch+1}. Restored best weights.")
+                break
+
+            if epoch == epochs - 1:
+                print(f"Finished training for {epochs} epochs. Restoring best weights.")
+                print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
+        
+        self.weight_model.eval()
+
+        return val_loss
 
 
 

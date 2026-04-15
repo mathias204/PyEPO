@@ -15,7 +15,7 @@ class PredictivePrescription(ABC):
     """
     def __init__(self, model, features, costs):
         self.features_unadjusted = features
-        self.costs_unadjusted = costs   #TODO: not so neatly
+        self.costs_unadjusted = costs
         if features.ndim == 3:
             features = features.reshape(-1, features.shape[-1])
             costs = costs.reshape(-1) 

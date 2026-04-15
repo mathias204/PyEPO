@@ -1,5 +1,5 @@
 from pyepo.predictive.pred import PredictivePrescription
-from pyepo.predictive.neural import NeuralPrediction
+from pyepo.predictive.neural import NeuralPrediction, GroupedNeuralPrediction
 from pyepo import EPO
 from pyepo.model.opt import optModel
 from enum import Enum
@@ -8,6 +8,7 @@ import numpy as np
 
 class WeightingTypeFunction(Enum):
     NEURAL = "neural"
+    NEURAL_GROUPED = "neural_grouped"
     NEAREST_NEIGHBOUR = "nearest_neighbour"
     RANDOM_FOREST = "random_forest"
     LOESS = "loess"
@@ -87,7 +88,8 @@ def finetune_neural_prescription(
     weight_model_class,
     arch_param_grid,
     train_param_grid,
-    loss_type
+    loss_type,
+    grouped: bool = False,
 ):
 
     best_score = np.inf
@@ -111,12 +113,20 @@ def finetune_neural_prescription(
                 **arch_params
             )
 
-            predictor = NeuralPrediction(
-                feats,
-                costs,
-                optmodel,
-                weight_model,
-            )
+            if grouped:
+                predictor = GroupedNeuralPrediction(
+                    feats,
+                    costs,
+                    optmodel,
+                    weight_model,
+                )
+            else:
+                predictor = NeuralPrediction(
+                    feats,
+                    costs,
+                    optmodel,
+                    weight_model,
+                )
 
             val_loss = predictor.train_model(
                 loss_type=loss_type,

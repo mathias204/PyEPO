@@ -92,8 +92,29 @@ class PredictOptimizePipeline:
                     loss_type
                 )
             
+            case WeightingTypeFunction.NEURAL_GROUPED:
+                feats = np.concatenate((x_train, x_val), axis=0)
+                costs = np.concatenate((c_train, c_val), axis=0)
+                weight_model_class = params.pop('weight_model')
+                loss_type = params.pop('loss')
+
+                weight_model_param_grid = params.get("weight_model_param_grid")
+
+                train_param_grid = params.get("train_param_grid")
+
+                return finetune_neural_prescription(
+                    feats,
+                    costs,
+                    optmodel,
+                    weight_model_class,
+                    weight_model_param_grid,
+                    train_param_grid,
+                    loss_type,
+                    grouped=True
+                )
+            
             case _:
-                ValueError(f"Unknown model type {config['type']}")
+                raise ValueError(f"Unknown model type {config['type']}")
 
     def plot_results(self, save_path, title='Regret vs Number of Data Points'):
         """Plots mean regret with error bars representing standard deviation."""
