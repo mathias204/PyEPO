@@ -124,7 +124,7 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
         )
 
         optmodel = knapSackModel(weights)
-        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel
+        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel, {}
     return generator
 
 if __name__ == "__main__":

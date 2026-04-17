@@ -66,7 +66,7 @@ class optGrbModel(optModel):
             Gurobi linear expression representing f(z, c)
         """
         if isinstance(self.x, gp.MVar):
-            return c @ self.x
+            return (c * self.x).sum()
         return gp.quicksum(c[j] * self.x[j] for j in range(len(c)))
 
     def setObj(self, c):

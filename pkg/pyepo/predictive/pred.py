@@ -44,7 +44,10 @@ class PredictivePrescription(ABC):
         return weights
 
     
-    def _optimize_shared(self, x):
+    def _optimize_shared(self, x, m = None):
+        if m is not None:
+            constraints = self.model.setM(m)
+
         W = np.ndarray((len(x), len(self.features)))
         with torch.no_grad():
             for i,x_i in enumerate(x):
@@ -58,16 +61,19 @@ class PredictivePrescription(ABC):
         self.model.setWeightObj(W, self.costs)
         sol, obj = self.model.solve()
 
+        if m is not None:
+            self.model.removeM(constraints)
+
         if isinstance(sol, torch.Tensor):
             sol = sol.detach().cpu().numpy()
 
         return sol, obj
 
 
-    def optimize(self, x): 
+    def optimize(self, x, m=None): 
         # Predict
         if x.ndim == 2:
-            return self._optimize_shared(x)
+            return self._optimize_shared(x, m)
 
         with torch.no_grad():
             weights = self._get_weights(x)

@@ -17,13 +17,13 @@ class WeightingTypeFunction(Enum):
     CART = "cart"
     SAA = "saa" 
 
-def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_test, c_test):
+def test_model(prediction_model: PredictivePrescription, opt_model: optModel, x_test, c_test, m_test=None):
     # TODO: can be made a little more efficient by batching, only setting objective and solving can't be batched
     loss = 0
     optsum = 0
 
-    for x, true_cost in zip(x_test, c_test):
-        pred_sol, _ = prediction_model.optimize(x)
+    for x, true_cost, m in zip(x_test, c_test, m_test if m_test is not None else [None]*len(x_test)):
+        pred_sol, _ = prediction_model.optimize(x, m)
 
         opt_model.setObj(true_cost)
         _, true_obj = opt_model.solve()
@@ -49,6 +49,7 @@ def finetune_predictive_prescription(
     optmodel,
     param_grid,
     model_kwargs=None,
+    m_val=None
 ):
     if model_kwargs is None:
         model_kwargs = {}
@@ -70,7 +71,7 @@ def finetune_predictive_prescription(
             **model_kwargs,
         )
 
-        score = test_model(model, optmodel, x_val, c_val)
+        score = test_model(model, optmodel, x_val, c_val, m_val)
 
         if score < best_score:
             best_score = score

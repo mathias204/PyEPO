@@ -30,33 +30,33 @@ class PredictOptimizePipeline:
         """Iterates through data sizes, trains models, and records regret."""
         for idx, num_data in enumerate(self.data_sizes):
             for run in range(self.num_runs):
-                x_train, c_train, x_val, c_val, x_test, c_test, optmodel = self.data_generator(num_data)
+                x_train, c_train, x_val, c_val, x_test, c_test, optmodel, aux = self.data_generator(num_data)
 
                 for model_name, config in self.models.items():
                     print(f"Training {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
-                    predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel)
-                    self.results[model_name][idx, run] = test_model(predictor, optmodel, x_test, c_test)
+                    predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+                    self.results[model_name][idx, run] = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'))
 
-    def _initialize_and_train(self, config, x_train, c_train, x_val, c_val, optmodel):
+    def _initialize_and_train(self, config, x_train, c_train, x_val, c_val, optmodel, m_train = None, m_val = None):
         """Handles specific model instantiation and training logic."""
 
         params = config.get('params').copy()
         match config["type"]:
             case WeightingTypeFunction.NEAREST_NEIGHBOUR:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(NearestPrediction, x_train, c_train, x_val, c_val, optmodel, param_grid)
+                return finetune_predictive_prescription(NearestPrediction, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
             
             case WeightingTypeFunction.LOESS:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(LOESS, x_train, c_train, x_val, c_val, optmodel, param_grid)
+                return finetune_predictive_prescription(LOESS, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
             
             case WeightingTypeFunction.KERNEL:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(KernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid)
+                return finetune_predictive_prescription(KernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
             
             case WeightingTypeFunction.RKERNEL:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid)
+                return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
             
             case WeightingTypeFunction.CART:
                 feats = np.concatenate((x_train, x_val), axis=0)
@@ -70,7 +70,7 @@ class PredictOptimizePipeline:
         
             case WeightingTypeFunction.RANDOM_FOREST:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid)
+                return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
         
             case WeightingTypeFunction.NEURAL:
                 feats = np.concatenate((x_train, x_val), axis=0)
@@ -89,7 +89,7 @@ class PredictOptimizePipeline:
                     weight_model_class,
                     weight_model_param_grid,
                     train_param_grid,
-                    loss_type
+                    loss_type,
                 )
             
             case WeightingTypeFunction.NEURAL_GROUPED:
@@ -110,7 +110,9 @@ class PredictOptimizePipeline:
                     weight_model_param_grid,
                     train_param_grid,
                     loss_type,
-                    grouped=True
+                    grouped=True,
+                    m_train=m_train,
+                    m_val=m_val
                 )
             
             case _:
