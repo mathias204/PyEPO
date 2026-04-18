@@ -41,6 +41,28 @@ class WeightModel(nn.Module):
         weights = self.net(inp).squeeze(-1)
         weights = torch.softmax(weights, dim=1)
         return weights
+    
+
+# Predict model
+class PredictModel(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dim=128, dropout=0.0):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x): 
+        """
+        x: [B, D] query features
+        returns: [B, output_dim] predictions
+        """
+        return self.net(x)
 
 
 # optimization model
@@ -178,9 +200,11 @@ if __name__ == "__main__":
     pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
     pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
 
+    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, predict_model = PredictModel)
+
     # Run and plot
     pipeline.execute()
     pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
     # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
-    pipeline.plot_boxplot(sizes[7], 'results/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
+    pipeline.plot_boxplot(sizes[0], 'results/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
     pipeline.plot_weight_distribution(150, 'results/knapsack_weights.png', 'Knapsack Weight distribution')

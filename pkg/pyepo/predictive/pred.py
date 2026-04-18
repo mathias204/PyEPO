@@ -9,7 +9,19 @@ import numpy as np
 import torch
 from pyepo.model.opt import optModel
 
-class PredictivePrescription(ABC):
+class Predictor(ABC):
+    """
+    This is an abstract class for predictive models
+    """
+
+    @abstractmethod
+    def optimize(self, x):
+        """
+        An abstract method to gather the predictions for the optimization decisions
+        """
+        raise NotImplementedError
+
+class PredictivePrescription(Predictor):
     """
     This is an abstract class for predicitive prescription model
     """

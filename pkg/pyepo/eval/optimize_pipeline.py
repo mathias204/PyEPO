@@ -3,7 +3,7 @@ from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from pyepo.predictive import NearestPrediction, RandomForestPrescription, LOESS, KernelPrescription, RecursiveKernelPrescription, CartPrescription, SAA
-from pyepo.predictive.utils import test_model, WeightingTypeFunction, finetune_predictive_prescription, finetune_neural_prescription
+from pyepo.predictive.utils import test_model, WeightingTypeFunction, finetune_predictive_prescription, finetune_neural_prescription, finetune_neural_dfl
 import matplotlib.ticker as mtick
 import torch
 
@@ -113,6 +113,25 @@ class PredictOptimizePipeline:
                     grouped=True,
                     m_train=m_train,
                     m_val=m_val
+                )
+            
+            case WeightingTypeFunction.NEURAL_DFL:
+                predict_model_class = params.pop('predict_model')
+                loss_type = params.pop('loss')
+
+                weight_model_param_grid = params.get("weight_model_param_grid")
+                train_param_grid = params.get("train_param_grid")
+
+                return finetune_neural_dfl(
+                    x_train,
+                    c_train,
+                    x_val,
+                    c_val,
+                    optmodel,
+                    predict_model_class,
+                    weight_model_param_grid,
+                    train_param_grid,
+                    loss_type
                 )
             
             case _:
@@ -258,7 +277,7 @@ class PredictOptimizePipeline:
         num_models = len(self.models)
         fig, axes = plt.subplots(num_models, 1, figsize=(14, 4 * num_models), sharex=True)
 
-        x, c, optmodel = self.data_generator(data_size)
+        x, c, optmodel, _ = self.data_generator(data_size)
 
         
         x_train, x_test, c_train, c_test = train_test_split(x, c, test_size=0.1)
@@ -266,6 +285,9 @@ class PredictOptimizePipeline:
         x_sample = x_test[0]
 
         for i, (model_name, config) in enumerate(self.models.items()):
+            if config['type'] == WeightingTypeFunction.NEURAL_DFL:
+                continue
+
             predictor = self._initialize_and_train(config, x_train, c_train, optmodel)
 
             weights = predictor._get_weights(x_sample)
