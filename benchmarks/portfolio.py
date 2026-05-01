@@ -1,46 +1,15 @@
 import numpy as np
-import pyepo
+from pyepo.data.portfolio import genData
 from pyepo.model.omo import optOmoModel
 # from pyepo.model.grb import optGrbModel
 import pyomo.environ as pyo
+from sklearn.model_selection import train_test_split
 import torch
-from torch import nn
 from pyepo import EPO
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import LossType, KernelPrescription
 
-class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim*2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Dropout(dropout),
-        )
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x, features): 
-        """
-        x: [B, D] query features
-        features: [N, D] reference features
-        returns: [B, N] normalized weights
-        """
-        B, N, D = features.shape
-
-        # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(1).expand(-1, N, -1)        # [B, N, D]
-
-        # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, features], dim=-1)      # [B, N, 2D]
-
-        weights = self.net(inp).squeeze(-1)
-        weights = torch.softmax(weights, dim=1)
-        return weights
-    
 # optimization model
 class portfolioModel(optOmoModel):
     def __init__(self, n_assets, beta):
@@ -68,6 +37,8 @@ class portfolioModel(optOmoModel):
             c (np.ndarray): cost vector for one sample
             
         """
+        # clip negative values to 0
+        c = np.clip(c, a_min=0, a_max=None)
         return pyo.log(1 + self.beta * self.x[0] + pyo.quicksum(c[i] * self.x[i + 1] for i in range(len(c))))
     
     def cal_obj(self, c, x):
@@ -148,13 +119,25 @@ class portfolioModel(optOmoModel):
     
 def portfolio_generator_factory(m=50, p = 4, deg=4, e=1):
     optmodel = portfolioModel(m, 0.08) 
-    def generator(num_data):
-        _, x, c = pyepo.data.portfolio.genData(num_data=num_data, num_features=p, num_assets=m, deg=deg, noise_level=e, seed=42)
-        return x, c,optmodel
+    def generator(num_data, seed=42):
+        _, x, c = genData(num_data=num_data, num_features=p, num_assets=m, deg=deg, noise_level=e, seed=seed)
+
+
+        x_tmp, x_test, c_tmp, c_test = train_test_split(
+            x, c, test_size=0.1, random_state=0 
+        )
+
+        x_train, x_val, c_train, c_val = train_test_split(
+            x_tmp, c_tmp, test_size=0.11, random_state=0 
+        )
+
+        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel, {}
+    
     return generator
     
 if __name__ == "__main__":
     sizes = np.linspace(10, 200, 5).astype(int)
+    sizes = np.linspace(100, 100, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -182,30 +165,40 @@ if __name__ == "__main__":
 
     weight_model_param_grid = {
         "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1]
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [0,1,2],
     }
 
     train_param_grid = {
         "epochs": [1000],
-        "batch_size": [32, 64],
+        "batch_size": [32],
         "lr": [1e-3, 5e-4],
+    }
+
+    dfl_model_param_grid = {
+        "hidden_dim": [32, 64, 128],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [0,1,2],
     }
 
 
     # Register models to benchmark
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
     pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
     pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
+    # pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    # pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
+    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
+    
+    pipeline.add_model(r'$z^{SFGE}(x)$',  WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+
 
 
     # Run and plot
     pipeline.execute()
-    pipeline.plot_results('results/portfolio_regret.png', 'Portfolio Benchmark Regret')
-    pipeline.plot_boxplot(sizes[2],'results/portfolio_boxplot.png', "Portfolio Benchmark Boxplot")
-    pipeline.plot_weight_distribution(150, 'results/portfolio_weights.png', 'Portfolio weight distribution')
+    # pipeline.plot_results('results/portfolio/portfolio_regret.png', 'Portfolio Benchmark Regret')
+    pipeline.plot_boxplot(sizes[0],'results/portfolio/portfolio_boxplot.png', "Portfolio Benchmark Boxplot")
+    # pipeline.plot_weight_distribution(150, 'results/portfolio/portfolio_weights.png', 'Portfolio weight distribution')

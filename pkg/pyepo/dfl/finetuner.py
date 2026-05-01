@@ -1,0 +1,57 @@
+import itertools
+import numpy as np
+from pyepo.dfl.predictor import MLPPredictor
+from pyepo.dfl.noisifier import Noisifier
+from pyepo.dfl.SFGE import SFGEDecisionMaker
+from pyepo.dfl.SPO import SPODecisionMaker
+from pyepo.predictive.utils import LossType
+
+
+def dfl_finetune(
+    x_train,
+    y_train,
+    x_val,
+    y_val,
+    optmodel,
+    arch_param_grid,
+    train_param_grid,
+    loss_type: LossType,
+):
+    
+    best_score = np.inf
+    best_params = None
+    best_model = None
+
+    arch_keys = list(arch_param_grid.keys())
+    arch_vals = list(arch_param_grid.values())
+
+    train_keys = list(train_param_grid.keys())
+    train_vals = list(train_param_grid.values())
+
+    for arch_combo in itertools.product(*arch_vals):
+        arch_params = dict(zip(arch_keys, arch_combo))
+
+        for train_combo in itertools.product(*train_vals):
+            train_params = dict(zip(train_keys, train_combo))
+
+            predictor = MLPPredictor(
+                x_train.shape[-1],
+                y_train.shape[-1],
+                **arch_params
+            )
+
+            if loss_type == LossType.SFGE:
+                noisifier = Noisifier(predictor)
+                dfl_maker = SFGEDecisionMaker(noisifier, optmodel, **train_params)
+            elif loss_type == LossType.SPO:
+                dfl_maker = SPODecisionMaker(predictor, optmodel, **train_params)
+            
+            val_loss = dfl_maker.train_model(x_train, y_train, x_val, y_val)
+
+            if val_loss < best_score:
+                best_score = val_loss
+                best_params = {**arch_params, **train_params}
+                best_model = dfl_maker
+
+    print("Best params:", best_params)
+    return best_model

@@ -19,8 +19,6 @@ params_dict = {
     3: {'p': 0.5, 'q': 0.5}  
 }
 
-
-
 # Weight model
 class WeightModel(nn.Module):
     def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
@@ -222,7 +220,6 @@ def matching_generator_factory(instance = 1):
 
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 15).astype(int)
     sizes = np.linspace(200, 200, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(

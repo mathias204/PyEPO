@@ -1,52 +1,14 @@
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
+import torch
 from pyepo.model.grb import optGrbModel
 from sklearn.model_selection import train_test_split
-import torch
-from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import KernelPrescription, LossType
 from pyepo.data.generate_california_house_price_mapping import generate_california_house_prices_mapping
 from sklearn.preprocessing import StandardScaler
-
-# Weight model
-class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Dropout(dropout),
-            nn.Linear(input_dim*2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-        )
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x, features): 
-        """
-        x: [B, X, D] query features
-        features: [B, N, D] reference features
-        returns: [B, X, N] normalized weights
-        """
-        B, N, D = features.shape
-        _, X, _ = x.shape
-
-        # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(2).expand(-1, -1, N, -1) # [B, X, N, D]
-
-        feat_exp = features.unsqueeze(1).expand(-1, X, -1, -1)
-
-        # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, feat_exp], dim=-1)
-
-        weights = self.net(inp).squeeze(-1)
-
-        weights = torch.softmax(weights, dim=-1)
-        return weights
-
 
 # optimization model
 class knapSackModel(optGrbModel):
@@ -134,8 +96,8 @@ class knapSackModel(optGrbModel):
 
 
 def knapsack_generator_factory(dims=3, num_item=20):
-    def generator(num_data):
-        x, c = generate_california_house_prices_mapping(num_data, num_item)
+    def generator(num_data, seed=42):
+        x, c = generate_california_house_prices_mapping(num_data, num_item, seed=seed)
 
         x_tmp, x_test, c_tmp, c_test = train_test_split(
             x, c, test_size=0.1, random_state=0 
@@ -170,11 +132,12 @@ def knapsack_generator_factory(dims=3, num_item=20):
 
         optmodel = knapSackModel(weights, capacities)
 
-        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel
+        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel, {}
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(4, 200, 10).astype(int)
+    # sizes = np.linspace(4, 200, 10).astype(int)
+    sizes = np.linspace(50, 50, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -200,30 +163,41 @@ if __name__ == "__main__":
     }
 
     weight_model_param_grid = {
-        "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1]
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
+        "shared": [True],
     }
 
     train_param_grid = {
         "epochs": [1000],
-        "batch_size": [32, 64],
+        "batch_size": [32],
         "lr": [1e-3, 5e-4],
+    }
+
+    dfl_model_param_grid = {
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
+        "shared": [True]
     }
 
     # Register models to benchmark
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
-    pipeline.add_model(r'$\hat{z}^{SFGE}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.DER, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
-    pipeline.add_model(r'$\hat{z}^{SPO}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
+    # pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    # # pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    # pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
+    # pipeline.add_model(r'$\hat{z}^{SFGE}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SFGE, epochs=1000, weight_model = WeightModel)
+    # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.DER, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
+
+    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
     # Run and plot
     pipeline.execute()
-    pipeline.plot_results('results/knapsack_houses_regret.png', 'Knapsack Houses Benchmark Regret')
-    pipeline.plot_boxplot(sizes[10], 'results/knapsack_houses_boxplot.png', 'Knapsack Houses Benchmark Boxplot')
-    # pipeline.plot_normalized_bar_chart(sizes[0], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
+    # pipeline.plot_results('results/houses/knapsack_houses_regret.png', 'Knapsack Houses Benchmark Regret')
+    pipeline.plot_boxplot(sizes[0], 'results/houses/knapsack_houses_boxplot.png', 'Knapsack Houses Benchmark Boxplot')
+    # pipeline.plot_normalized_bar_chart(sizes[0], 'Nearest Neighbor', 'results/houses/test.png', 'Knapsack Houses Benchmark Barchart')

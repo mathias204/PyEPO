@@ -125,9 +125,9 @@ class ShortestPathModel(optGrbModel):
             raise ValueError(f"Unsupported x shape {x.shape}")
         
 def shortest_path_generator_factory(num_feat=5):
-    def generator(num_data):
+    def generator(num_data, seed=42):
         x, c = genData(
-            num_data, num_feat, (5,5), deg=4, noise_width=0.5, seed=135
+            num_data, num_feat, (5,5), deg=4, noise_width=0.5, seed=seed
         )
 
         x_tmp, x_test, c_tmp, c_test = train_test_split(

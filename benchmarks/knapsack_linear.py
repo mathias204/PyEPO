@@ -1,69 +1,13 @@
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
-import pyepo
+from pyepo.data.knapsack import genData
 from pyepo.model.grb import optGrbModel
 from sklearn.model_selection import train_test_split
 import torch
-from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import KernelPrescription, LossType
-
-# Weight model
-class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim*2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Dropout(dropout),
-        )
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x, features): 
-        """
-        x: [B, D] query features
-        features: [B, N, D] reference features
-        returns: [B, N] normalized weights
-        """
-        B, N, D = features.shape
-
-        # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(1).expand(-1, N, -1)        # [B, N, D]
-
-        # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, features], dim=-1)      # [B, N, 2D]
-
-        weights = self.net(inp).squeeze(-1)
-        weights = torch.softmax(weights, dim=1)
-        return weights
-    
-
-# Predict model
-class PredictModel(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, output_dim),
-        )
-
-    def forward(self, x): 
-        """
-        x: [B, D] query features
-        returns: [B, output_dim] predictions
-        """
-        return self.net(x)
-
 
 # optimization model
 class knapSackModel(optGrbModel):
@@ -132,9 +76,9 @@ class knapSackModel(optGrbModel):
             raise ValueError(f"Unsupported x shape {x.shape}")
 
 def knapsack_generator_factory(num_feat=5, num_item=10):
-    def generator(num_data):
-        weights, x, c = pyepo.data.knapsack.genData(
-            num_data, num_feat, num_item, dim=3, deg=4, noise_width=0.5, seed=135
+    def generator(num_data, seed):
+        weights, x, c = genData(
+            num_data, num_feat, num_item, dim=3, deg=4, noise_width=0.5, seed=seed
         )
 
         x_tmp, x_test, c_tmp, c_test = train_test_split(
@@ -150,8 +94,8 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 15).astype(int)
-    sizes = np.linspace(200, 200, 1).astype(int)
+    sizes = np.linspace(10, 250, 10).astype(int)
+    # sizes = np.linspace(200, 200, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -179,7 +123,8 @@ if __name__ == "__main__":
 
     weight_model_param_grid = {
         "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1]
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [0,1,2],
     }
 
     train_param_grid = {
@@ -188,23 +133,30 @@ if __name__ == "__main__":
         "lr": [1e-3, 5e-4],
     }
 
+    dfl_model_param_grid = {
+        "hidden_dim": [32, 64, 128],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [0,1,2],
+    }
+
     # Register models to benchmark
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    # pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
     pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
+    # pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    # pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
+    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
 
-    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, predict_model = PredictModel)
+    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    # pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
     # Run and plot
     pipeline.execute()
-    pipeline.plot_results('results/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
+    pipeline.plot_results('results/knapsack_normal/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
     # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
-    pipeline.plot_boxplot(sizes[0], 'results/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
-    pipeline.plot_weight_distribution(150, 'results/knapsack_weights.png', 'Knapsack Weight distribution')
+    # pipeline.plot_boxplot(sizes[0], 'results/knapsack_normal/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
+    # pipeline.plot_weight_distribution(200, 'results/knapsack_normal/knapsack_weights.png', 'Knapsack Weight distribution')

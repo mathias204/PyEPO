@@ -67,7 +67,7 @@ class NeuralPrediction(PredictivePrescription):
         weights = self.weight_model(x, features)
         return weights
     
-    def _optimize_shared(self, x):
+    def _optimize_shared(self, x, m=None):
         with torch.no_grad():
             W = self._get_weights(x)
             
@@ -306,7 +306,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
                 if torch.cuda.is_available():
                     x, c, y_sol, y_obj, data_feats, data_costs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda()
                 # forward pass
-                weights = self._get_weights(x, data_feats)             # [B, N]
+                weights = self._get_weights(x, data_feats)             # [B, X, N]
                 if loss_type == LossType.SPO:
                     loss = self._spo_loss(spo_plus, weights, data_costs, c, y_sol, y_obj)
                 else:
@@ -362,6 +362,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
             if epoch == epochs - 1:
                 print(f"Finished training for {epochs} epochs. Restoring best weights.")
                 print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
+
         
         self.weight_model.eval()
 

@@ -9,39 +9,6 @@ from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import KernelPrescription, LossType
 import torch
-from torch import nn
-
-# Weight model
-class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim*2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Dropout(dropout),
-        )
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x, features): 
-        """
-        x: [B, D] query features
-        features: [B, N, D] reference features
-        returns: [B, N] normalized weights
-        """
-        B, N, D = features.shape
-
-        # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(1).expand(-1, N, -1)        # [B, N, D]
-
-        # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, features], dim=-1)      # [B, N, 2D]
-
-        weights = self.net(inp).squeeze(-1)
-        weights = torch.softmax(weights, dim=1)
-        return weights
 
 class SolveICON(optGrbModel):
     # nbMachines: number of machine
@@ -269,13 +236,13 @@ class SolveICON(optGrbModel):
 
 
 def energy_generator_factory(instance = 1):
-    def generator(num_data): #TODO: num_data is not yet implemented
-        x_train, y_train, x_val, y_val, x_test, y_test = get_data()
+    def generator(num_data, seed = 42): #TODO: num_data is not yet implemented
+        x_train, y_train, x_val, y_val, x_test, y_test = get_data(seed=seed)
 
         params = get_instance_config("data/load{}/day01.txt".format(instance))
         optmodel = SolveICON(**params)
 
-        return x_train, y_train, x_val, y_val, x_test, y_test, optmodel
+        return x_train, y_train, x_val, y_val, x_test, y_test, optmodel, {}
     return generator
 
 
@@ -309,7 +276,8 @@ if __name__ == "__main__":
 
     weight_model_param_grid = {
         "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1]
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [0, 1, 2],
     }
 
     train_param_grid = {
@@ -328,11 +296,11 @@ if __name__ == "__main__":
     pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
     # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
 
     # Run and plot
     pipeline.execute()
-    # pipeline.plot_results('results/shortest_path_linear_regret.png', 'Shortest Path Benchmark Regret')
-    # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Shortest Path Benchmark Barchart')
-    pipeline.plot_boxplot(sizes[0], 'results/shortest_path_linear_boxplot.png', 'Shortest Path Benchmark Boxplot')
-    # pipeline.plot_weight_distribution(150, 'results/shortest_path_weights.png', 'Shortest Path Weight distribution')
+    pipeline.plot_results('results/energy/energy_schedule_regret_evolution.png', 'Energy-cost aware scheduling - Regret evolution')
+    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/energy/energy_schedule_normalized_barchart.png', 'Energy-cost aware scheduling - Bar chart')
+    pipeline.plot_boxplot(sizes[0], 'results/energy/energy_schedule_boxplot.png', 'Energy-cost aware scheduling - Regret boxplot')
+    pipeline.plot_weight_distribution(150, 'results/energy/energy_schedule_weight_distribution.png', 'Energy-cost aware scheduling - Weight Distribution')
