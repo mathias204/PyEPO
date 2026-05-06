@@ -181,3 +181,94 @@ class MLPWeightPredictor(WeightPredictor, nn.Module):
             nn.Module: The first layer of the MLP.
         """
         return self.mlp[0]
+
+# Assuming WeightPredictor is defined elsewhere in the codebase
+class TransformerWeightPredictor(WeightPredictor, nn.Module):
+    """
+    A Transformer-based predictor that models complex relationships between queries
+    and a dataset of keys. 
+    
+    The keys are first processed through a Transformer encoder to contextualize them 
+    with respect to one another. A cross-attention mechanism is then used to align 
+    the query with the contextualized keys, outputting the attention weights as a 
+    probability distribution.
+    """
+
+    def __init__(
+        self,
+        num_inputs: int,
+        num_heads: int = 4,
+        num_layers: int = 2,
+        hidden_dim: int = 256,
+        dropout: float = 0.1,
+        shared: bool = False,
+        *args,
+        **kwargs,
+    ):
+        WeightPredictor.__init__(self, num_inputs, 1)
+        nn.Module.__init__(self, *args, **kwargs)
+        self.shared = shared
+
+        # Project inputs to the hidden dimension required by the Transformer
+        self.input_proj = nn.Linear(num_inputs, hidden_dim) if num_inputs != hidden_dim else nn.Identity()
+
+        # Transformer Encoder for self-attention among the keys (data samples)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.key_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        # Cross-attention to align the query with the contextualized keys
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=num_heads,
+            dropout=dropout,
+            batch_first=True
+        )
+
+    def forward(self, query: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
+        """
+        Performs the forward pass to compute the probability distribution over the keys.
+
+        Args:
+            query (torch.Tensor): The query tensor of shape [B, D] or [B, X, D].
+            keys (torch.Tensor): The keys tensor of shape [B, N, D].
+
+        Returns:
+            torch.Tensor: The attention weights representing a probability distribution, 
+                          shape [B, N] or [B, X, N].
+        """
+        if not self.shared and query.dim() == 2:
+            query = query.unsqueeze(1)  # [B, 1, D]
+
+        # Project features to the transformer hidden dimension
+        query_proj = self.input_proj(query)  # [B, X, hidden_dim]
+        keys_proj = self.input_proj(keys)    # [B, N, hidden_dim]
+
+        # Process keys through self-attention so samples become aware of each other
+        contextualized_keys = self.key_encoder(keys_proj)  # [B, N, hidden_dim]
+
+        # Query attends to contextualized keys to extract the probability distribution
+        _, attention_weights = self.cross_attention(
+            query=query_proj,
+            key=contextualized_keys,
+            value=contextualized_keys,
+            need_weights=True,
+            average_attn_weights=True 
+        )
+
+        # Output shape of attention_weights is [B, X, N]
+        if not self.shared:
+            attention_weights = attention_weights.squeeze(1)  # [B, N]
+        
+        return attention_weights
+
+    def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
+        """
+        Returns an iterator over the module's parameters.
+        """
+        return super().parameters(recurse=recurse)

@@ -124,14 +124,24 @@ class NeuralPrediction(PredictivePrescription):
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
 
-    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE, use_noam_scheduler: bool = False, warmup_steps: int = 1000, d_model: int = 256):
         X_train, X_val, y_train, y_val = train_test_split(
             self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=0
         )
 
-        optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
+        if use_noam_scheduler:
+            optimizer = optim.Adam(self.weight_model.parameters(), lr=1.0, betas=(0.9, 0.98), eps=1e-9)
+            
+            def noam_lambda(step):
+                step += 1 
+                return (d_model ** -0.5) * min(step ** -0.5, step * (warmup_steps ** -1.5))
+                
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=noam_lambda)
+        else:
+            optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
+            scheduler = None
 
-        S = int(0.8*len(self.features)) # S for backward calculation
+        S = int(0.8*len(self.features)) 
 
         if loss_type == LossType.SPO:
             spo_plus = SPOPlus(self.model)
@@ -169,8 +179,9 @@ class NeuralPrediction(PredictivePrescription):
 
                 if torch.cuda.is_available():
                     x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
-                # forward pass
-                weights = self._get_weights(x, data_feats)             # [B, N]
+                
+                weights = self._get_weights(x, data_feats)             
+                
                 if loss_type == LossType.SFGE:
                     loss = self._sfge_loss(weights, c, y_obj, data_sols, S)
                 elif loss_type == LossType.SPO:
@@ -179,19 +190,19 @@ class NeuralPrediction(PredictivePrescription):
                     loss = self._der_loss(weights, c, y_obj, data_sols)
                 else:
                     raise ValueError("Invalid loss type. Must be LossType.SFGE, LossType.SPO, or LossType.DER.")
-                # backward pass
+                
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                
+                if use_noam_scheduler:
+                    scheduler.step()
 
                 train_loss += loss.item()
-
-
                 opt_sum += np.sum(abs(y_obj.squeeze().cpu().numpy()))
 
             train_loss = train_loss / len(train_loader)
 
-            # validation
             self.weight_model.eval()
             with torch.no_grad():
                 val_loss = 0.0  
@@ -203,7 +214,7 @@ class NeuralPrediction(PredictivePrescription):
                     if torch.cuda.is_available():
                         x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
 
-                    feats_batch = feats_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()  # [B, N, D]
+                    feats_batch = feats_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()  
                     costs_batch = costs_full_data.unsqueeze(0).expand(len(x), -1,-1).contiguous()
                     sols = sols_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()
 
@@ -235,6 +246,7 @@ class NeuralPrediction(PredictivePrescription):
                 if calc_regret:
                     regret_loss = regret_loss / opt_sum
                 val_loss = val_loss / len(val_loader)
+            
             if self.verbose:
                 print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
             

@@ -1,7 +1,7 @@
 from pyepo.predictive.neural import LossType
 from pyepo.func.surrogate import SPOPlus
 from pyepo.predictive.pred import PredictivePrescription, Predictor
-from pyepo.predictive.weight_predictor import MLPWeightPredictor
+from pyepo.predictive.weight_predictor import MLPWeightPredictor, TransformerWeightPredictor
 from pyepo.predictive.neural import NeuralPrediction, GroupedNeuralPrediction
 from pyepo import EPO
 from pyepo.model.opt import optModel
@@ -117,10 +117,13 @@ def finetune_neural_prescription(
         for train_combo in itertools.product(*train_vals):
             train_params = dict(zip(train_keys, train_combo))
 
-            weight_model = MLPWeightPredictor(
-                feats.shape[-1],
-                **arch_params
-            )
+            if arch_params["model"] == "attention":
+                weight_model = TransformerWeightPredictor(
+                    feats.shape[-1],
+                    **{k: v for k, v in arch_params.items() if k != "model"}
+                )
+            else:
+                weight_model = MLPWeightPredictor(feats.shape[-1], **{k: v for k, v in arch_params.items() if k != "model"})
 
             if grouped:
                 predictor = GroupedNeuralPrediction(
@@ -139,6 +142,8 @@ def finetune_neural_prescription(
 
             val_loss = predictor.train_model(
                 loss_type=loss_type,
+                d_model=arch_params["hidden_dim"],
+                use_noam_scheduler=True if arch_params["model"] == "attention" else False,
                 **train_params
             )
 
