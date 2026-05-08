@@ -94,8 +94,8 @@ def knapsack_generator_factory(num_feat=5, num_item=10):
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 250, 10).astype(int)
-    # sizes = np.linspace(200, 200, 1).astype(int)
+    # sizes = np.linspace(10, 250, 10).astype(int)
+    sizes = np.linspace(200, 200, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -141,22 +141,22 @@ if __name__ == "__main__":
 
     # Register models to benchmark
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
     pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    # pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
+    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
     pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
     pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
 
     pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
-    # pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
     # Run and plot
-    pipeline.execute()
-    pipeline.plot_results('results/knapsack_normal/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
+    pipeline.execute(save_dir="saved_models/knapsack/", force_run=True)
+    # pipeline.plot_results('results/knapsack_normal/knapsack_linear_regret.png', 'Knapsack Benchmark Regret')
     # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Knapsack Benchmark Barchart')
-    # pipeline.plot_boxplot(sizes[0], 'results/knapsack_normal/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
+    pipeline.plot_boxplot(sizes[0], 'results/knapsack_normal/knapsack_linear_boxplot.png', 'Knapsack Benchmark Boxplot')
     # pipeline.plot_weight_distribution(200, 'results/knapsack_normal/knapsack_weights.png', 'Knapsack Weight distribution')

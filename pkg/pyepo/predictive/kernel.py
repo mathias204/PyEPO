@@ -1,6 +1,9 @@
 from pyepo.predictive.pred import PredictivePrescription
-from scipy.spatial import distance
+from scipy.spatial import distance, cKDTree
 import numpy as np
+import signal
+
+from multiprocessing import Process, Queue
 
 class KernelPrescription(PredictivePrescription):
     def __init__(self, feats, costs, model, k, kernel, random_state=None):
@@ -61,14 +64,45 @@ class KernelPrescription(PredictivePrescription):
         return np.ones(len(self.features), dtype=float) / float(len(self.features))
 
 
+def kd_query_worker(features, k, queue):
+    tree = cKDTree(features)
+    dists, _ = tree.query(features, k=k + 1, workers=-1)
+    queue.put(dists)
+
 class RecursiveKernelPrescription(KernelPrescription):
     def __init__(self, feats, costs, model, k, kernel, random_state=None):
         super().__init__(feats, costs, model, k, kernel, random_state)
+        self.train_model()
 
-        pairwise_dists = distance.cdist(self.features, self.features, metric="euclidean")
-        np.fill_diagonal(pairwise_dists, np.inf)
-        pairwise_dists = pairwise_dists
-        self._h_i = np.partition(pairwise_dists, self.k - 1, axis=1)[:, self.k - 1]
+    def train_model(self):
+        while True:
+            queue = Queue()
+
+            p = Process(
+                target=kd_query_worker,
+                args=(self.features, self.k, queue)
+            )
+
+            p.start()
+
+            p.join(timeout=900)  # 15 minutes timeout
+
+            if p.is_alive():
+                print(f"Timeout triggered for k={self.k}. Reducing dataset...")
+
+                p.terminate()
+                p.join()
+
+                self.reduce_dataset(15000)
+
+                continue
+
+            dists = queue.get()
+
+            h_i = dists[:, -1]
+            self._h_i = np.where(h_i == 0, 1e-8, h_i)
+
+            break
 
     def _get_weights(self, x):
         delta_x = self.features - x

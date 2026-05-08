@@ -23,39 +23,6 @@ for i in V:
 G = nx.DiGraph()
 G.add_nodes_from(V)
 G.add_edges_from(E)
-
-
-# Weight model
-class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim*2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Dropout(dropout),
-        )
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x, features): 
-        """
-        x: [B, D] query features
-        features: [B, N, D] reference features
-        returns: [B, N] normalized weights
-        """
-        B, N, D = features.shape
-
-        # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(1).expand(-1, N, -1)        # [B, N, D]
-
-        # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, features], dim=-1)      # [B, N, 2D]
-
-        weights = self.net(inp).squeeze(-1)
-        weights = torch.softmax(weights, dim=1)
-        return weights
     
 class ShortestPathModel(optGrbModel):
     def __init__(self, G):
@@ -139,7 +106,7 @@ def shortest_path_generator_factory(num_feat=5):
         )
 
         optmodel = ShortestPathModel(G)
-        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel
+        return x_train, c_train, x_val, c_val, x_test, c_test, optmodel, {}
     return generator
 
 
@@ -172,14 +139,21 @@ if __name__ == "__main__":
     }
 
     weight_model_param_grid = {
-        "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1]
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
     }
 
     train_param_grid = {
         "epochs": [1000],
-        "batch_size": [32, 64],
+        "batch_size": [32],
         "lr": [1e-3, 5e-4],
+    }
+
+    dfl_model_param_grid = {
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
     }
 
     # Register models to benchmark
@@ -191,12 +165,15 @@ if __name__ == "__main__":
     pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
     pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
+    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
+
+    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
     # Run and plot
-    pipeline.execute()
-    # pipeline.plot_results('results/shortest_path_linear_regret.png', 'Shortest Path Benchmark Regret')
-    # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Shortest Path Benchmark Barchart')
-    pipeline.plot_boxplot(sizes[0], 'results/shortest_path_linear_boxplot.png', 'Shortest Path Benchmark Boxplot')
-    # pipeline.plot_weight_distribution(150, 'results/shortest_path_weights.png', 'Shortest Path Weight distribution')
+    pipeline.execute(save_dir="saved_models/shortest_path/")
+    # pipeline.plot_results('results/shortest_path/shortest_path_linear_regret.png', 'Shortest Path Benchmark Regret')
+    # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/shortest_path/test.png', 'Shortest Path Benchmark Barchart')
+    pipeline.plot_boxplot(sizes[0], 'results/shortest_path/shortest_path_linear_boxplot.png', 'Shortest Path Benchmark Boxplot')
+    # pipeline.plot_weight_distribution(150, 'results/shortest_path/shortest_path_weights.png', 'Shortest Path Weight distribution')

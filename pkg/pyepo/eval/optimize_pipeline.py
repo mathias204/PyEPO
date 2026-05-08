@@ -7,6 +7,10 @@ from pyepo.predictive.utils import test_model, WeightingTypeFunction, finetune_p
 from pyepo.dfl.finetuner import dfl_finetune
 import matplotlib.ticker as mtick
 import torch
+import pickle
+import hashlib
+import json
+import os
 
 class PredictOptimizePipeline:
     """Core experimental workflow manager."""
@@ -27,16 +31,109 @@ class PredictOptimizePipeline:
         self.models[name] = {'type': model_type, 'params': kwargs}
         self.results[name] = np.zeros((len(self.data_sizes), self.num_runs))
 
-    def execute(self):
-        """Iterates through data sizes, trains models, and records regret."""
+    def _generate_cache_filepath(self, save_dir, model_name, config, num_data, run):
+        """Generates a unique file path based on model parameters, data size, and run."""
+        os.makedirs(save_dir, exist_ok=True)
+        config_str = json.dumps(config, sort_keys=True, default=str)
+        config_hash = hashlib.md5(config_str.encode('utf-8')).hexdigest()
+        filename = f"{model_name}_size_{num_data}_run_{run}_{config_hash}.pkl"
+        return os.path.join(save_dir, filename)
+    
+    def _save_cached_model(self, filepath, predictor, result):
+        """Safely serializes the model by isolating C-level bindings and PyTorch autograd functions."""
+        detached_pointers = []
+        
+        # Attributes to detach: optimization models and unpicklable PyEPO training components
+        unpicklable_attrs = ['optmodel', 'model', 'spo_plus', 'optimizer', 'early_stopper']
+        
+        # 1. Detach top-level references
+        for attr in unpicklable_attrs:
+            if hasattr(predictor, attr) and getattr(predictor, attr) is not None:
+                detached_pointers.append((predictor, attr, getattr(predictor, attr)))
+                setattr(predictor, attr, None)
+                
+        # 2. Detach 1st-level nested references inside object dictionaries
+        if hasattr(predictor, '__dict__'):
+            for attr, val in vars(predictor).items():
+                if val is not None and hasattr(val, '__dict__'):
+                    for sub_attr in unpicklable_attrs:
+                        if hasattr(val, sub_attr) and getattr(val, sub_attr) is not None:
+                            detached_pointers.append((val, sub_attr, getattr(val, sub_attr)))
+                            setattr(val, sub_attr, None)
+
+        try:
+            with open(filepath, 'wb') as f:
+                pickle.dump((predictor, result), f)
+        except TypeError as e:
+            # Fallback for pure PyTorch neural models 
+            if hasattr(predictor, 'state_dict'):
+                import torch
+                torch.save({'state_dict': predictor.state_dict(), 'result': result}, filepath)
+            else:
+                raise RuntimeError(f"Failed to serialize {type(predictor)}: {e}")
+        finally:
+            # Reinject bindings to keep the in-memory object functional for the current run
+            for obj, attr, val in detached_pointers:
+                setattr(obj, attr, val)
+
+    def _load_cached_model(self, filepath, optmodel):
+        """Loads the serialized model and reinjects the required inference attributes."""
+        try:
+            with open(filepath, 'rb') as f:
+                predictor, result = pickle.load(f)
+        except (pickle.UnpicklingError, TypeError):
+            # Fallback for pure PyTorch-based neural predictors
+            import torch
+            checkpoint = torch.load(filepath)
+            result = checkpoint['result']
+            predictor = None 
+            
+        if predictor is not None:
+            # Re-inject top-level optimization models required for inference
+            if hasattr(predictor, 'optmodel') or not hasattr(predictor, 'model'):
+                predictor.optmodel = optmodel
+            if hasattr(predictor, 'model') or not hasattr(predictor, 'optmodel'):
+                predictor.model = optmodel
+                
+            # Re-inject 1st-level nested optimization models
+            if hasattr(predictor, '__dict__'):
+                for attr, val in vars(predictor).items():
+                    if val is not None and hasattr(val, '__dict__'):
+                        if 'optmodel' in val.__dict__:
+                            val.optmodel = optmodel
+                        if 'model' in val.__dict__:
+                            val.model = optmodel
+                            
+        return predictor, result
+
+    def execute(self, save_dir, force_run=False):
+        """Iterates through data sizes, trains models, records regret, and caches results."""
         for idx, num_data in enumerate(self.data_sizes):
             for run in range(self.num_runs):
                 x_train, c_train, x_val, c_val, x_test, c_test, optmodel, aux = self.data_generator(num_data, seed=run)
 
                 for model_name, config in self.models.items():
-                    print(f"Training {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
-                    predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
-                    self.results[model_name][idx, run] = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'))
+                    cache_filepath = self._generate_cache_filepath(save_dir, model_name, config, num_data, run)
+
+                    if os.path.exists(cache_filepath) and not force_run:
+                        print(f"Loading cached {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
+                        predictor, result = self._load_cached_model(cache_filepath, optmodel)
+                        
+                        if predictor is None:
+                            # Reconstruct PyTorch architecture if state_dict was loaded
+                            predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+                            checkpoint = torch.load(cache_filepath)
+                            predictor.load_state_dict(checkpoint['state_dict'])
+                            
+                        self.results[model_name][idx, run] = result
+                        
+                    else:
+                        print(f"Training {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
+                        predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+                        result = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'))
+                        
+                        self.results[model_name][idx, run] = result
+                        self._save_cached_model(cache_filepath, predictor, result)
 
     def _initialize_and_train(self, config, x_train, c_train, x_val, c_val, optmodel, m_train = None, m_val = None):
         """Handles specific model instantiation and training logic."""

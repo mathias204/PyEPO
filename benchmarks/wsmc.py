@@ -343,7 +343,7 @@ def wsmc_generator_factory(num_feat=5, num_item=10, num_sets=25):
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(200, 200, 1).astype(int)
+    sizes = np.linspace(20, 20, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -394,7 +394,7 @@ if __name__ == "__main__":
     pipeline.add_model(r'$z^{SFGE}(x)$',  WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
 
-    pipeline.execute()
+    pipeline.execute(save_dir="saved_models/wsmc/")
     # pipeline.plot_results('results/wsmc/wsmc_regret.png', 'Knapsack Benchmark Regret')
     pipeline.plot_boxplot(sizes[0], 'results/wsmc/wsmc_boxplot.png', 'Knapsack Benchmark Boxplot')
     # pipeline.plot_weight_distribution(150, 'results/wsmc/wsmc_weights.png', 'Knapsack Weight distribution')

@@ -8,14 +8,19 @@ class CartPrescription(PredictivePrescription):
         self.random_state = random_state
 
         dtr = tree.DecisionTreeRegressor(random_state=self.random_state)
-        self.weight_model = dtr.fit(feats, costs)
+        self.weight_model = dtr.fit(self.features, self.costs)
+
+        self._precompute_leaf_weights()
+
+    def _precompute_leaf_weights(self):
+        self._train_leaf_indices = self.weight_model.apply(self.features)
 
     def _get_weights(self, x):
         N = len(self.features)
         weights = np.zeros(N)
 
         leaf_x = self.weight_model.apply([x])[0]
-        leaf_train = self.weight_model.apply(self.features)
+        leaf_train = self._train_leaf_indices
         same_leaf = (leaf_train == leaf_x)
         idx = np.where(same_leaf)[0]
         if len(idx) > 0:

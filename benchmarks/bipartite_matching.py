@@ -1,6 +1,5 @@
 from gurobipy import GRB
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
 from pyepo.model.grb import optGrbModel
 import gurobipy as gp
 import numpy as np
@@ -8,7 +7,6 @@ from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import KernelPrescription, LossType
 import torch
-from torch import nn
 from pyepo.data.matching import get_cora
 
 
@@ -18,41 +16,6 @@ params_dict = {
     2: {'p': 0.25, 'q': 0.25},
     3: {'p': 0.5, 'q': 0.5}  
 }
-
-# Weight model
-class WeightModel(nn.Module):
-    def __init__(self, input_dim, hidden_dim=128, dropout=0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim*2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-            nn.Dropout(dropout),
-        )
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x, features): 
-        """
-        x: [B, D] query features
-        features: [B, N, D] reference features
-        returns: [B, N] normalized weights
-        """
-        B, N, D = features.shape
-
-        # expand to compare every query with all reference features
-        x_exp = x.unsqueeze(1).expand(-1, N, -1)        # [B, N, D]
-
-        # concatenate query with corresponding reference features
-        inp = torch.cat([x_exp, features], dim=-1)      # [B, N, 2D]
-
-        weights = self.net(inp).squeeze(-1)
-        weights = torch.softmax(weights, dim=1)
-        return weights
-
-
-
 
 class BipartiteMatching(optGrbModel):
     def __init__(self,m ,p=0.25, q=0.25, relaxation=True) -> None:
@@ -119,8 +82,8 @@ class BipartiteMatching(optGrbModel):
         else:
             x = np.asarray(x, dtype=np.float32)
             
-        if c.shape[-1] != x.shape[-1]:
-            raise ValueError(f"Mismatch: c has {c.shape[-1]} features, expected {x.shape[-1]}.")
+        # if c.shape[-1] != x.shape[-1]:
+        #     raise ValueError(f"Mismatch: c has {c.shape[-1]} features, expected {x.shape[-1]}.")
             
         # Case 1: x shape (50, 50)
         if x.ndim == 2:
@@ -187,21 +150,17 @@ class BipartiteMatching(optGrbModel):
 
         self._model.setObjective(self._objective_fun(obj_coefficients))
 
-        print(f"Number of variables: {self._model.NumVars}")
-        print(f"Number of constraints: {self._model.NumConstrs}")
-        print(f"Number of non-zeros: {self._model.NumNZs}")
-
 
 def matching_generator_factory(instance = 1):
-    def generator(num_data): #TODO: num_data is not yet implemented
+    def generator(num_data, seed): #TODO: num_data is not yet implemented
         x, y , m = get_cora()
 
         x_tmp, x_test, y_tmp, y_test, m_tmp, m_test = train_test_split(
-            x, y, m, test_size=0.1, random_state=0 
+            x, y, m, test_size=0.1, random_state=seed 
         )
 
         x_train, x_val, y_train, y_val, m_train, m_val = train_test_split(
-            x_tmp, y_tmp, m_tmp, test_size=0.11, random_state=0 
+            x_tmp, y_tmp, m_tmp, test_size=0.11, random_state=seed 
         )
 
         optmodel = BipartiteMatching(params_dict[instance].values(), relaxation=True)
@@ -220,7 +179,8 @@ def matching_generator_factory(instance = 1):
 
 
 if __name__ == "__main__":
-    sizes = np.linspace(200, 200, 1).astype(int)
+    x, _ , _ = get_cora()
+    sizes = np.linspace(x.shape[0], x.shape[0], 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -247,14 +207,23 @@ if __name__ == "__main__":
     }
 
     weight_model_param_grid = {
-        "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1]
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
+        "shared": [True],
     }
 
     train_param_grid = {
         "epochs": [1000],
-        "batch_size": [32, 64],
+        "batch_size": [32],
         "lr": [1e-3, 5e-4],
+    }
+
+    dfl_model_param_grid = {
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
+        "shared": [True]
     }
 
     # Register models to benchmark
@@ -266,12 +235,12 @@ if __name__ == "__main__":
     pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
     pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel)
+    # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
 
+    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    # pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    
     # Run and plot
-    pipeline.execute()
-    # pipeline.plot_results('results/shortest_path_linear_regret.png', 'Shortest Path Benchmark Regret')
-    # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/test.png', 'Shortest Path Benchmark Barchart')
-    pipeline.plot_boxplot(sizes[0], 'results/shortest_path_linear_boxplot.png', 'Shortest Path Benchmark Boxplot')
-    # pipeline.plot_weight_distribution(150, 'results/shortest_path_weights.png', 'Shortest Path Weight distribution')
+    pipeline.execute(save_dir="saved_models/matching/")
+    pipeline.plot_boxplot(sizes[0], 'results/matching/bipartite_boxplot.png', 'Shortest Path Benchmark Boxplot')

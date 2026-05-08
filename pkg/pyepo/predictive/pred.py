@@ -31,6 +31,7 @@ class PredictivePrescription(Predictor):
         if features.ndim == 3:
             features = features.reshape(-1, features.shape[-1])
             costs = costs.reshape(-1) 
+        
         self.features = features
         self.costs = costs
         self.model: optModel = model
@@ -41,6 +42,17 @@ class PredictivePrescription(Predictor):
         An abstract method to gather the weights for the prediction
         """
         raise NotImplementedError
+    
+
+    def reduce_dataset(self, max_samples=15000):
+        if len(self.features) <= max_samples:
+            return self.features, self.costs
+
+        idx = np.random.choice(len(self.features), size=max_samples, replace=False)
+
+        self.features = self.features[idx]
+        self.costs = self.costs[idx]
+
     
     def _create_numpy_weights(self, weights):
         if isinstance(weights, torch.Tensor):

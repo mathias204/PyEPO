@@ -12,6 +12,9 @@ dependencies = [
     "torch>=2.9.0",
     "matplotlib>=3.10.8",
     "pandas>=3.0.1",
+    "faiss-cpu>=1.13.2",
+    "gurobipy>=13.0.1",
+    "pyomo>=6.10.0",
 ]
 
 [project.optional-dependencies]

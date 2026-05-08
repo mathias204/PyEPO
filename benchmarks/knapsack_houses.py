@@ -137,7 +137,7 @@ def knapsack_generator_factory(dims=3, num_item=20):
 
 if __name__ == "__main__":
     # sizes = np.linspace(4, 200, 10).astype(int)
-    sizes = np.linspace(50, 50, 1).astype(int)
+    sizes = np.linspace(5, 5, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -184,12 +184,12 @@ if __name__ == "__main__":
 
     # Register models to benchmark
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    # # pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    # pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    # pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
+    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
+    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
     # pipeline.add_model(r'$\hat{z}^{SFGE}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SFGE, epochs=1000, weight_model = WeightModel)
     # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.DER, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
     pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
     # Run and plot
-    pipeline.execute()
+    pipeline.execute(save_dir="saved_models/houses/")
     # pipeline.plot_results('results/houses/knapsack_houses_regret.png', 'Knapsack Houses Benchmark Regret')
     pipeline.plot_boxplot(sizes[0], 'results/houses/knapsack_houses_boxplot.png', 'Knapsack Houses Benchmark Boxplot')
     # pipeline.plot_normalized_bar_chart(sizes[0], 'Nearest Neighbor', 'results/houses/test.png', 'Knapsack Houses Benchmark Barchart')

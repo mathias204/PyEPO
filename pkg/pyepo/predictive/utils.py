@@ -8,7 +8,6 @@ from pyepo.model.opt import optModel
 from enum import Enum
 import itertools
 import numpy as np
-import time
 
 import copy
 

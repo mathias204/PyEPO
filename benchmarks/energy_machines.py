@@ -1,6 +1,5 @@
 
 from gurobipy import GRB
-from sklearn.preprocessing import StandardScaler
 from pyepo.model.grb import optGrbModel
 import gurobipy as gp
 import numpy as np
@@ -247,8 +246,9 @@ def energy_generator_factory(instance = 1):
 
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 15).astype(int)
-    sizes = np.linspace(200, 200, 1).astype(int)
+    x_train, y_train, x_val, y_val, x_test, y_test = get_data()
+    total_length = x_train.shape[0] + x_val.shape[0] + x_test.shape[0]
+    sizes = np.linspace(total_length, total_length, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -275,17 +275,24 @@ if __name__ == "__main__":
     }
 
     weight_model_param_grid = {
-        "hidden_dim": [32, 64, 128],
+        "hidden_dim": [32, 64],
         "dropout": [0, 0.1],
-        "num_hidden_layers": [0, 1, 2],
+        "num_hidden_layers": [1,2],
+        "shared": [True],
     }
 
     train_param_grid = {
         "epochs": [1000],
-        "batch_size": [32, 64],
+        "batch_size": [32],
         "lr": [1e-3, 5e-4],
     }
 
+    dfl_model_param_grid = {
+        "hidden_dim": [32, 64],
+        "dropout": [0, 0.1],
+        "num_hidden_layers": [1,2],
+        "shared": [True]
+    }
     # Register models to benchmark
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
     pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
@@ -298,8 +305,10 @@ if __name__ == "__main__":
     # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
     pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
 
+    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+
     # Run and plot
-    pipeline.execute()
+    pipeline.execute(save_dir="saved_models/energy/")
     pipeline.plot_results('results/energy/energy_schedule_regret_evolution.png', 'Energy-cost aware scheduling - Regret evolution')
     pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/energy/energy_schedule_normalized_barchart.png', 'Energy-cost aware scheduling - Bar chart')
     pipeline.plot_boxplot(sizes[0], 'results/energy/energy_schedule_boxplot.png', 'Energy-cost aware scheduling - Regret boxplot')
