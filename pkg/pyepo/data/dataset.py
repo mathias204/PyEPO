@@ -106,7 +106,7 @@ class optDataset(Dataset):
     
 class optDatasetPP(Dataset):
     """
-    This class is Torch Dataset for optimization problems specifically to train pedictive prescriptions.
+    This class is Torch Dataset for optimization problems specifically to train a weighted pedictive prescriptions.
 
     Reference
 

@@ -15,6 +15,7 @@ class LossType(Enum):
     SFGE = 1
     SPO = 2
     DER = 3
+    MSE = 4 
 
 class NeuralPrediction(PredictivePrescription):
 
@@ -158,7 +159,7 @@ class NeuralPrediction(PredictivePrescription):
 
             self.weight_model = self.weight_model.cuda()
 
-        early_stopper = EarlyStopper(5, 0)
+        early_stopper = EarlyStopper(10, 0)
 
         epoch_times = []
 
@@ -300,7 +301,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
             self.weight_model = self.weight_model.cuda()
 
-        early_stopper = EarlyStopper(5, 0)
+        early_stopper = EarlyStopper(10, 0)
 
         epoch_times = []
 

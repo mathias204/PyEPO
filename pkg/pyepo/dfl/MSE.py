@@ -10,7 +10,7 @@ from pyepo.dfl.utils import EarlyStopper
 from pyepo.dfl.DFLMaker import DFLMaker
 import time
 
-class SPODecisionMaker(DFLMaker):
+class MSEDecisionMaker(DFLMaker):
     def __init__(
         self,
         predictor: Predictor,
@@ -25,7 +25,6 @@ class SPODecisionMaker(DFLMaker):
         self.learning_rate = lr
         self.optmodel = optmodel
         self.early_stopper = EarlyStopper(patience=10, min_delta=0)
-        self.spo_plus = SPOPlus(self.optmodel, processes=0)
 
         self._set_optimizer()
 
@@ -58,7 +57,9 @@ class SPODecisionMaker(DFLMaker):
         # Obtain the distributional predictor and sample
         pred = self.predictor.forward(features)
 
-        loss: torch.Tensor = self.spo_plus(pred, costs, optimal_solutions, optimal_objectives)
+        loss_terms: torch.Tensor = torch.mean((pred - costs)**2)
+
+        loss = loss_terms.mean(dim=0)
 
         # Update
         self.optimizer.zero_grad()
@@ -84,23 +85,7 @@ class SPODecisionMaker(DFLMaker):
         """
         pred = self.predictor.forward(features)
 
-        # Get objective value per prediction
-        objectives = torch.zeros(pred.shape[0]) 
-        for i in range(pred.shape[0]):
-            # Put samples in prediction batch to get decisions and objective values
-            self.optmodel.setObj(pred[i])
-            sol, _ = self.optmodel.solve()
-
-            obj = self.optmodel.cal_obj(costs[i], sol)
-            objectives[i] = float(obj)
-
-        opt_obj_squeezed = optimal_objectives.squeeze()
-
-        if self.optmodel.modelSense == EPO.MINIMIZE:
-            loss_terms: torch.Tensor =  (objectives - opt_obj_squeezed) / opt_obj_squeezed
-        else:
-            loss_terms: torch.Tensor = (opt_obj_squeezed - objectives)/ opt_obj_squeezed
-
+        loss_terms = torch.mean((pred - costs)**2)
         loss = loss_terms.mean(dim=0)
         logger_loss = loss.detach().numpy().astype(np.float32)
 

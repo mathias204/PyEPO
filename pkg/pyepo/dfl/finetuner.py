@@ -1,5 +1,6 @@
 import itertools
 import numpy as np
+from pyepo.dfl.MSE import MSEDecisionMaker
 from pyepo.dfl.predictor import MLPPredictor
 from pyepo.dfl.noisifier import Noisifier
 from pyepo.dfl.SFGE import SFGEDecisionMaker
@@ -46,7 +47,9 @@ def dfl_finetune(
                 dfl_maker = SFGEDecisionMaker(noisifier, optmodel, **train_params)
             elif loss_type == LossType.SPO:
                 dfl_maker = SPODecisionMaker(predictor, optmodel, **train_params)
-            
+            elif loss_type == LossType.MSE:
+                dfl_maker = MSEDecisionMaker(predictor, optmodel, **train_params)
+
             val_loss, train_info = dfl_maker.train_model(x_train, y_train, x_val, y_val)
             end_time = time.perf_counter()
 
