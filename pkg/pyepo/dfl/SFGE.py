@@ -24,7 +24,7 @@ class SFGEDecisionMaker(DFLMaker):
         noisifier: Noisifier,
         optmodel: optModel,
         batch_size: int = 32,
-        lr: float = 1e-3,
+        lr: float = 1e-4,
         standardize_loss: bool = True,
         epochs: int = 1000,
         num_samples: int = 1,           # Variable S
@@ -36,7 +36,7 @@ class SFGEDecisionMaker(DFLMaker):
         self.learning_rate = lr
         self.noisifier = noisifier
         self.optmodel = optmodel
-        self.early_stopper = EarlyStopper(patience=5, min_delta=0)
+        self.early_stopper = EarlyStopper(patience=50, min_delta=0)
         self._set_optimizer()
 
     def _set_optimizer(self) -> None:
@@ -73,7 +73,7 @@ class SFGEDecisionMaker(DFLMaker):
         log_probs = individual_log_probs.sum(dim=-1)  # sum over num_parameters dimension (the last one)
 
         # Get objective value per sample
-        objectives = torch.zeros(samples.shape[:2])  # per sample, per batch
+        objectives = torch.zeros(samples.shape[1], samples.shape[0])  # per batch, per sample
         for i in range(self.num_samples):
             # Put samples in prediction batch to get decisions and objective values
             batch_sample_i = samples[i]  # (B, num_parameters)
@@ -82,7 +82,7 @@ class SFGEDecisionMaker(DFLMaker):
                 sol, _ = self.optmodel.solve()
 
                 obj = self.optmodel.cal_obj(costs[j], sol)
-                objectives[i,j] = float(obj)
+                objectives[j,i] = float(obj)
                 
         # Compute loss function value
         # if self.loss_function_str == "regret":
@@ -103,8 +103,8 @@ class SFGEDecisionMaker(DFLMaker):
             loss_terms = self.standardize(loss_terms)
 
         # Compute surrogate loss for gradient
-        base_loss = loss_terms.mean(dim=0).detach().numpy().astype(np.float32)
-        loss = (loss_terms * log_probs).mean(dim=0)
+        base_loss = loss_terms.mean(dim=1).detach().numpy().astype(np.float32)
+        loss = (loss_terms * log_probs.transpose(0, 1)).mean(dim=1)
         logger_loss = loss.detach().numpy().astype(np.float32)
         loss_mean = torch.mean(loss)
 
@@ -271,9 +271,9 @@ class SFGEDecisionMaker(DFLMaker):
         Returns:
             torch.Tensor: Standardized batch losses with zero mean and unit variance along dim 1.
         """
-        # We standardize along the batch dimension (dim=1), using keepdim for broadcasting.
-        mean_batch = torch.mean(batch, dim=1, keepdim=True)
-        std_batch = torch.std(batch, dim=1, keepdim=True)
+        # We standardize along the batch dimension (dim=0), using keepdim for broadcasting.
+        mean_batch = torch.mean(batch, dim=0, keepdim=True)
+        std_batch = torch.std(batch, dim=0, keepdim=True)
 
         # Broadcasting handles the element-wise operation correctly for both 1D and 2D cases.
         standardized = (batch - mean_batch) / (std_batch + epsilon)
