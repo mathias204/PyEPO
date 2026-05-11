@@ -5,7 +5,7 @@ from pyepo.dfl.noisifier import Noisifier
 from pyepo.dfl.SFGE import SFGEDecisionMaker
 from pyepo.dfl.SPO import SPODecisionMaker
 from pyepo.predictive.utils import LossType
-
+import time
 
 def dfl_finetune(
     x_train,
@@ -34,6 +34,7 @@ def dfl_finetune(
         for train_combo in itertools.product(*train_vals):
             train_params = dict(zip(train_keys, train_combo))
 
+            start_time = time.perf_counter()
             predictor = MLPPredictor(
                 x_train.shape[-1],
                 y_train.shape[-1],
@@ -46,12 +47,14 @@ def dfl_finetune(
             elif loss_type == LossType.SPO:
                 dfl_maker = SPODecisionMaker(predictor, optmodel, **train_params)
             
-            val_loss = dfl_maker.train_model(x_train, y_train, x_val, y_val)
+            val_loss, train_info = dfl_maker.train_model(x_train, y_train, x_val, y_val)
+            end_time = time.perf_counter()
 
             if val_loss < best_score:
                 best_score = val_loss
                 best_params = {**arch_params, **train_params}
                 best_model = dfl_maker
+                train_info = {**train_info, "training_time": end_time - start_time}
 
     print("Best params:", best_params)
-    return best_model
+    return best_model, train_info

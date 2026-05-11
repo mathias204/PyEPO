@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import torch
 from pyepo.data.dataset import optDataset
@@ -214,7 +215,9 @@ class SFGEDecisionMaker(DFLMaker):
             optDataset(self.optmodel, x_val, y_val),
             batch_size=self.batch_size, shuffle=False
         )
+        epoch_times = []
         for epoch in range(self.num_epochs):
+            start_time = time.perf_counter()
             _ = self.run_epoch("train", train_loader, epoch)
             val_results = self.run_epoch("validation", val_loader, epoch)
 
@@ -227,9 +230,13 @@ class SFGEDecisionMaker(DFLMaker):
             if self.early_stopper.step(avg_val_loss, self.noisifier):
                 print(f"Early stopping at epoch {epoch} with validation loss {avg_val_loss:.4f}")
                 break
-        
+            
+            epoch_times.append(time.perf_counter() - start_time)
+        info = {"mean_epoch_time": np.mean(epoch_times),
+                "final_epoch": epoch+1}
+
         self.noisifier.eval()  # Set to evaluation mode after training
-        return avg_val_loss
+        return avg_val_loss, info
     
     def optimize(self, x, m = None): 
         # Predict

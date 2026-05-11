@@ -8,11 +8,12 @@ from scipy import linalg
 
 class LOESS(PredictivePrescription):
 
-    def __init__(self, feats, costs, model, k):
+    def __init__(self, feats, costs, model, k, kernel):
         super().__init__(model, feats, costs)
 
         self.k = min(k, len(self.features))
         self.tree = cKDTree(self.features)
+        self.kernel = kernel
 
     def _get_weights(self, x):
         dists, idx = self.tree.query(x, k=self.k)
@@ -29,21 +30,17 @@ class LOESS(PredictivePrescription):
             return weights
 
         local_features = self.features[idx]
-
-        u = dists / h_N
-        local_k_val = (1.0 - u**3)**3
-
         local_delta_x = local_features - x
+
+        local_k_val = self.kernel(local_delta_x / h_N)
 
         Xi = (local_delta_x.T * local_k_val) @ local_delta_x
         v = local_k_val @ local_delta_x
 
         # Regularize the diagonal in-place for numerical stability
-        # This makes the symmetric matrix strictly positive-definite
         Xi.flat[::Xi.shape[0] + 1] += 1e-8
 
         # Solve Xi * w = v directly using Cholesky decomposition
-        # This replaces the expensive SVD from np.linalg.pinv
         v_Xi_inv = linalg.solve(Xi, v, assume_a='pos')
 
         T = local_delta_x @ v_Xi_inv
@@ -51,7 +48,6 @@ class LOESS(PredictivePrescription):
         local_weights = local_k_val * np.maximum(1.0 - T, 0.0)
         weight_sum = np.sum(local_weights)
 
-        # Generating a 50k dense array per query point exhausts memory bandwidth
         weights = np.zeros(len(self.features))
         
         if weight_sum > 0:

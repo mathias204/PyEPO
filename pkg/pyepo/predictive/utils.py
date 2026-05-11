@@ -1,3 +1,4 @@
+import time
 from pyepo.predictive.neural import LossType
 from pyepo.func.surrogate import SPOPlus
 from pyepo.predictive.pred import PredictivePrescription, Predictor
@@ -85,8 +86,15 @@ def finetune_predictive_prescription(
 
     feats = np.concatenate((x_train, x_val), axis=0)
     costs = np.concatenate((c_train, c_val), axis=0)
+    start_time = time.perf_counter()
+    
+    best_model = model_cls(feats, costs, optmodel, **best_params, **model_kwargs)
+    
+    end_time = time.perf_counter()
+    
+    training_info = {"training_time": end_time - start_time}
 
-    return model_cls(feats, costs, optmodel, **best_params, **model_kwargs)
+    return best_model, training_info
 
 def finetune_neural_prescription(
     feats,
@@ -121,6 +129,7 @@ def finetune_neural_prescription(
                 **arch_params
             )
 
+            start_time = time.perf_counter()
             if grouped:
                 predictor = GroupedNeuralPrediction(
                     feats,
@@ -136,18 +145,22 @@ def finetune_neural_prescription(
                     weight_model,
                 )
 
-            val_loss = predictor.train_model(
+            val_loss, train_info = predictor.train_model(
                 loss_type=loss_type,
                 **train_params
             )
+            end_time = time.perf_counter()
 
             if val_loss < best_score:
                 best_score = val_loss
                 best_params = {**arch_params, **train_params}
                 best_model = predictor
+                info = {"training_time": end_time - start_time,
+                        "best_parameters": best_params,
+                        **train_info}
 
     print("Best params:", best_params)
-    return best_model
+    return best_model, info
 
 
 class EarlyStopper:

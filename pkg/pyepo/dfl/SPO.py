@@ -8,6 +8,7 @@ from pyepo import EPO
 from pyepo.dfl.predictor import Predictor
 from pyepo.dfl.utils import EarlyStopper
 from pyepo.dfl.DFLMaker import DFLMaker
+import time
 
 class SPODecisionMaker(DFLMaker):
 
@@ -25,7 +26,7 @@ class SPODecisionMaker(DFLMaker):
         self.learning_rate = lr
         self.optmodel = optmodel
         self.early_stopper = EarlyStopper(patience=5, min_delta=0)
-        self.spo_plus = SPOPlus(self.optmodel)
+        self.spo_plus = SPOPlus(self.optmodel, processes=0)
 
         self._set_optimizer()
 
@@ -162,7 +163,9 @@ class SPODecisionMaker(DFLMaker):
             optDataset(self.optmodel, x_val, y_val),
             batch_size=self.batch_size, shuffle=False
         )
+        epoch_times = []
         for epoch in range(self.num_epochs):
+            start_time = time.perf_counter()
             _ = self.run_epoch("train", train_loader, epoch)
             val_results = self.run_epoch("validation", val_loader, epoch)
 
@@ -175,9 +178,13 @@ class SPODecisionMaker(DFLMaker):
             if self.early_stopper.step(avg_val_loss, self.predictor):
                 print(f"Early stopping at epoch {epoch} with validation loss {avg_val_loss:.4f}")
                 break
+            epoch_time = time.perf_counter() - start_time
+            epoch_times.append(epoch_time)
+        info = {"mean_epoch_time": np.mean(epoch_times),
+                "final_epoch": epoch+1}
         
         self.predictor.eval()  # Set to evaluation mode after training
-        return avg_val_loss
+        return avg_val_loss, info
     
     def optimize(self, x, m = None): 
         # Predict

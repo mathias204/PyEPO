@@ -1,7 +1,6 @@
 from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from pyepo.predictive import NearestPrediction, RandomForestPrescription, LOESS, KernelPrescription, RecursiveKernelPrescription, CartPrescription, SAA
 from pyepo.predictive.utils import test_model, WeightingTypeFunction, finetune_predictive_prescription, finetune_neural_prescription
 from pyepo.dfl.finetuner import dfl_finetune
@@ -11,6 +10,7 @@ import pickle
 import hashlib
 import json
 import os
+import time
 
 class PredictOptimizePipeline:
     """Core experimental workflow manager."""
@@ -29,7 +29,7 @@ class PredictOptimizePipeline:
     def add_model(self, name, model_type: WeightingTypeFunction, **kwargs):
         """Registers a predictive model."""
         self.models[name] = {'type': model_type, 'params': kwargs}
-        self.results[name] = np.zeros((len(self.data_sizes), self.num_runs))
+        self.results[name] = np.empty((len(self.data_sizes), self.num_runs), dtype=object)
 
     def _generate_cache_filepath(self, save_dir, model_name, config, num_data, run):
         """Generates a unique file path based on model parameters, data size, and run."""
@@ -129,11 +129,16 @@ class PredictOptimizePipeline:
                         
                     else:
                         print(f"Training {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
-                        predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+                        predictor, info = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+
+                        start_time = time.perf_counter()
                         result = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'))
-                        
-                        self.results[model_name][idx, run] = result
-                        self._save_cached_model(cache_filepath, predictor, result)
+                        end_time = time.perf_counter()
+                        info['testing_time'] = end_time - start_time
+                        info['result'] = result
+
+                        self.results[model_name][idx, run] = info
+                        self._save_cached_model(cache_filepath, predictor, info)
 
     def _initialize_and_train(self, config, x_train, c_train, x_val, c_val, optmodel, m_train = None, m_val = None):
         """Handles specific model instantiation and training logic."""
@@ -159,12 +164,20 @@ class PredictOptimizePipeline:
             case WeightingTypeFunction.CART:
                 feats = np.concatenate((x_train, x_val), axis=0)
                 costs = np.concatenate((c_train, c_val), axis=0)
-                return CartPrescription(feats, costs, optmodel)
+                start_time = time.perf_counter()
+                model = CartPrescription(feats, costs, optmodel)
+                end_time = time.perf_counter()
+                training_info = {"training_time": end_time - start_time}
+                return model, training_info
             
             case WeightingTypeFunction.SAA:
                 feats = np.concatenate((x_train, x_val), axis=0)
                 costs = np.concatenate((c_train, c_val), axis=0)
-                return SAA(feats, costs, optmodel)
+                start_time = time.perf_counter()
+                model = SAA(feats, costs, optmodel)
+                end_time = time.perf_counter()
+                training_info = {"training_time": end_time - start_time}
+                return model, training_info
         
             case WeightingTypeFunction.RANDOM_FOREST:
                 param_grid = params.get('param_grid')
@@ -245,6 +258,7 @@ class PredictOptimizePipeline:
             plt.figure(figsize=(12, 5))
             
             for model_name, run_data in self.results.items():
+                run_data = np.array([[run_dict["result"] for run_dict in run_list] for run_list in run_data])
                 means = np.mean(run_data, axis=1)
                 stds = np.std(run_data, axis=1)
                 
@@ -269,67 +283,6 @@ class PredictOptimizePipeline:
             plt.savefig(save_path)
             plt.close()
 
-    def plot_normalized_bar_chart(self, target_data_size, reference_model_name, save_path, title=None):
-        """Plots a normalized bar chart for a single dataset size with reference model baseline."""
-        if target_data_size not in self.data_sizes:
-            raise ValueError(f"Data size {target_data_size} not found in evaluated sizes.")
-        if reference_model_name not in self.results:
-            raise ValueError(f"Reference model {reference_model_name} not found in results.")
-
-        # Calculate normalized performance
-        size_idx = np.argwhere(self.data_sizes == target_data_size)[0]
-        model_names = list(self.results.keys())
-        
-        ref_data = self.results[reference_model_name][size_idx, :]
-
-        means = []
-        stds = []
-        for name in model_names:
-            run_data = self.results[name][size_idx, :]
-            
-            normalized_data = run_data / ref_data
-            
-            means.append(np.mean(normalized_data))
-            stds.append(np.std(normalized_data))
-
-
-        # Plot figure    
-        fig, ax = plt.subplots(figsize=(6, 5))
-
-        colors = ['#353155', '#556488', '#B7D8D6', '#8CAEC1', '#6987A7', '#D88A30']
-        colors = [colors[i % len(colors)] for i in range(len(model_names))]
-
-        width = 1.0
-        x_pos = np.arange(len(model_names)) * width
-
-        ax.bar(x_pos, means, width, color=colors, 
-               yerr=stds, error_kw=dict(ecolor='black', lw=3, capsize=0))
-
-        ax.set_ylabel('normalized absolute regret', fontsize=14)
-        
-        ax.set_xticks([x_pos.mean()])
-        ax.set_xticklabels([f'Size: {target_data_size}'], fontsize=14)
-
-        ax.spines['right'].set_visible(False)
-        ax.spines['top'].set_visible(False)
-        ax.spines['left'].set_linewidth(1.2)
-        ax.spines['bottom'].set_linewidth(1.2)
-        ax.tick_params(axis='y', labelsize=12)
-
-        legend_patches = [mpatches.Patch(color=colors[i], label=name) 
-                          for i, name in enumerate(model_names)]
-        
-        lgd = ax.legend(handles=legend_patches, loc='upper center', 
-                  bbox_to_anchor=(0.5, 1.15), ncol=min(3, len(model_names)), 
-                  frameon=False, fontsize=12, handlelength=2.5)
-
-        if title:
-            plt.title(title, pad=60, fontsize=14)
-
-        self._check_path(save_path)
-        plt.savefig(save_path, dpi=300, bbox_extra_artists=(lgd,), bbox_inches='tight')
-        plt.close()
-
 
     def plot_boxplot(self, target_data_size, save_path, title=None):
         """Plots a boxplot for relative regret across models for a single dataset size."""
@@ -347,7 +300,11 @@ class PredictOptimizePipeline:
             size_idx = np.where(self.data_sizes == target_data_size)[0][0]
             model_names = list(self.results.keys())
             
-            data_to_plot = [self.results[name][size_idx, :] * 100 for name in model_names]
+            # data_to_plot = [self.results[name][size_idx, :]["result"] * 100 for name in model_names]
+            data_to_plot = [
+                [run_dict["result"] * 100 for run_dict in self.results[name][size_idx, :]] 
+                for name in model_names
+            ]
 
             plt.style.use('seaborn-v0_8-darkgrid')
             fig, ax = plt.subplots(figsize=(12, 5))
@@ -408,7 +365,7 @@ class PredictOptimizePipeline:
                 if config['type'] == WeightingTypeFunction.NEURAL_DFL:
                     continue
 
-                predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel)
+                predictor,_ = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel)
                 weights = predictor._get_weights(x_sample)
                 
                 if isinstance(weights, torch.Tensor):

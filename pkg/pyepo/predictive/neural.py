@@ -134,7 +134,7 @@ class NeuralPrediction(PredictivePrescription):
         S = int(0.8*len(self.features)) # S for backward calculation
 
         if loss_type == LossType.SPO:
-            spo_plus = SPOPlus(self.model)
+            spo_plus = SPOPlus(self.model, processes=1)
 
         train_loader = torch.utils.data.DataLoader(
             optDatasetPP(self.model, X_train, y_train),
@@ -160,7 +160,10 @@ class NeuralPrediction(PredictivePrescription):
 
         early_stopper = EarlyStopper(5, 0)
 
+        epoch_times = []
+
         for epoch in range(epochs):
+            start_time = time.perf_counter()
             self.weight_model.train()
             train_loss = 0.0
             opt_sum = 0.0
@@ -235,6 +238,7 @@ class NeuralPrediction(PredictivePrescription):
                 if calc_regret:
                     regret_loss = regret_loss / opt_sum
                 val_loss = val_loss / len(val_loader)
+                epoch_times.append(time.perf_counter() - start_time)
             if self.verbose:
                 print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
             
@@ -249,8 +253,10 @@ class NeuralPrediction(PredictivePrescription):
                 print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
         
         self.weight_model.eval()
+        info = {"mean_epoch_time": np.mean(epoch_times),
+                "final_epoch": epoch+1}
 
-        return val_loss
+        return val_loss, info
 
 
 class GroupedNeuralPrediction(NeuralPrediction):
@@ -269,7 +275,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
 
-        spo_plus = SPOPlus(self.model)
+        spo_plus = SPOPlus(self.model, processes=1)
 
         X_train = X_train.reshape(-1, X_train.shape[-1])
         y_train = y_train.reshape(-1)
@@ -296,7 +302,10 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
         early_stopper = EarlyStopper(5, 0)
 
+        epoch_times = []
+
         for epoch in range(epochs):
+            start_time = time.perf_counter()
             self.weight_model.train()
             train_loss = 0.0
             opt_sum = 0.0
@@ -350,6 +359,8 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
                 val_loss = val_loss / len(val_loader)
 
+                epoch_times.append(time.perf_counter() - start_time)
+
             if self.verbose:
                 print(f"Epoch {epoch+1:03d}: train={train_loss:.4f}, val={val_loss:.4f}, regret_val_loss={regret_loss:.10f}")
             
@@ -366,7 +377,10 @@ class GroupedNeuralPrediction(NeuralPrediction):
         
         self.weight_model.eval()
 
-        return val_loss
+        info = {"mean_epoch_time": np.mean(epoch_times),
+                "final_epoch": epoch+1}
+
+        return val_loss, info
 
 
 
