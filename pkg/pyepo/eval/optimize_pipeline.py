@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import time
+import pandas as pd
 
 class PredictOptimizePipeline:
     """Core experimental workflow manager."""
@@ -105,6 +106,47 @@ class PredictOptimizePipeline:
                             val.model = optmodel
                             
         return predictor, result
+
+    def save_results_to_csv(self, filepath="experimental_results.csv"):
+        """
+        Flattens the recorded experimental results and exports them to a CSV file.
+        """
+        data = []
+
+        for model_name in self.models.keys():
+            for idx, num_data in enumerate(self.data_sizes):
+                for run in range(self.num_runs):
+                    try:
+                        # Retrieve the info dictionary for the specific iteration
+                        info = self.results[model_name][idx, run]
+                        
+                        # Create the base identifier columns
+                        row_data = {
+                            'model_name': model_name,
+                            'num_data': num_data,
+                            'run': run
+                        }
+                        
+                        # Merge the numerical metrics into the row
+                        if isinstance(info, dict):
+                            row_data.update(info)
+                        else:
+                            row_data['result'] = info
+                            
+                        data.append(row_data)
+                        
+                    except (KeyError, IndexError):
+                        # Skips iterations that might have failed or are missing
+                        continue
+
+        df = pd.DataFrame(data)
+
+        # Create the target directory if it does not exist
+        directory = os.path.dirname(filepath)
+        if directory:
+            os.makedirs(directory, exist_ok=True)
+            
+        df.to_csv(filepath, index=False)
 
     def execute(self, save_dir, force_run=False):
         """Iterates through data sizes, trains models, records regret, and caches results."""

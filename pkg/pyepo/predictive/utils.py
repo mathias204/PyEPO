@@ -92,7 +92,8 @@ def finetune_predictive_prescription(
     
     end_time = time.perf_counter()
     
-    training_info = {"training_time": end_time - start_time}
+    training_info = {"training_time": end_time - start_time,
+                     "best_parameters": best_params}
 
     return best_model, training_info
 

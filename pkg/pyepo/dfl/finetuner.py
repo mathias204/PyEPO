@@ -57,7 +57,9 @@ def dfl_finetune(
                 best_score = val_loss
                 best_params = {**arch_params, **train_params}
                 best_model = dfl_maker
-                train_info = {**train_info, "training_time": end_time - start_time}
+                info = {**train_info, 
+                        "training_time": end_time - start_time,
+                        "best_parameters": best_params}
 
     print("Best params:", best_params)
-    return best_model, train_info
+    return best_model, info
