@@ -1,14 +1,12 @@
 import numpy as np
 import torch
-from pyepo.data.dataset import optDataset
 from pyepo.model.opt import optModel
-from pyepo.func.surrogate import SPOPlus
-from pyepo import EPO
 
 from pyepo.dfl.predictor import Predictor
-from pyepo.dfl.utils import EarlyStopper
+from pyepo.dfl.utils import EarlyStopper, set_seeds
 from pyepo.dfl.DFLMaker import DFLMaker
 import time
+from torch.utils.data import TensorDataset
 
 class MSEDecisionMaker(DFLMaker):
     def __init__(
@@ -18,15 +16,17 @@ class MSEDecisionMaker(DFLMaker):
         batch_size: int = 32,
         lr: float = 1e-3,
         epochs: int = 1000,
+        seed: int | None = None,
     ) -> None:
         self.predictor = predictor
         self.batch_size = batch_size
         self.num_epochs = epochs
         self.learning_rate = lr
         self.optmodel = optmodel
-        self.early_stopper = EarlyStopper(patience=10, min_delta=0)
+        self.early_stopper = EarlyStopper(patience=15, min_delta=0.01)
 
         self._set_optimizer()
+        set_seeds(seed)
 
     def _set_optimizer(self) -> None:
         """
@@ -35,7 +35,7 @@ class MSEDecisionMaker(DFLMaker):
         print(f"set learning rate to {self.learning_rate}")
         self.optimizer = torch.optim.Adam(self.predictor.parameters(), lr=self.learning_rate)
 
-    def update(self, features: torch.Tensor, costs: torch.Tensor, optimal_solutions: torch.Tensor, optimal_objectives: torch.Tensor, epsilon: float = 10**-5) -> dict[str, torch.Tensor]:
+    def update(self, features: torch.Tensor, costs: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Updates the predictive model using the MVD (Measure-Valued Derivative) gradient.
 
@@ -45,9 +45,6 @@ class MSEDecisionMaker(DFLMaker):
         Args:
             features (torch.Tensor): The input features.
             costs (torch.Tensor): The costs associated with each sample.
-            optimal_solutions (torch.Tensor): The optimal solutions.
-            optimal_objectives (torch.Tensor): The optimal objective values.
-            epsilon (float): Unused parameter kept for API compatibility. Defaults to 1e-5.
 
         Returns:
             dict[str, torch.Tensor]: Accumulated losses and diagnostics for the logger,
@@ -72,7 +69,7 @@ class MSEDecisionMaker(DFLMaker):
         }
         return log_dict
     
-    def run_batch(self, features: torch.Tensor, costs: torch.Tensor, optimal_solutions: torch.Tensor, optimal_objectives: torch.Tensor, metrics: list[str] | None = None) -> dict[str, torch.Tensor]:
+    def run_batch(self, features: torch.Tensor, costs: torch.Tensor) -> dict[str, torch.Tensor]:
         """
         Evaluates the predictor on a batch of data without updating the model.
 
@@ -127,11 +124,11 @@ class MSEDecisionMaker(DFLMaker):
 
         # Run
         for batch in data_loader:
-            x, y, sol, obj = batch
+            x, y = batch
             if mode == "train":
-                batch_results = self.update(x, y, sol, obj)
+                batch_results = self.update(x, y)
             else:
-                batch_results = self.run_batch(x, y, sol, obj)
+                batch_results = self.run_batch(x, y)
             mode_batch_results = {f"{mode}/{key}": val for key, val in batch_results.items()}
             mode_batch_results["batch_size"] = len(x)
             epoch_results.append(mode_batch_results)
@@ -140,11 +137,11 @@ class MSEDecisionMaker(DFLMaker):
     
     def train_model(self, x_train, y_train, x_val, y_val):
         train_loader = torch.utils.data.DataLoader(
-            optDataset(self.optmodel, x_train, y_train),
+            TensorDataset(torch.from_numpy(x_train).float(), torch.from_numpy(y_train).float()),
             batch_size=self.batch_size, shuffle=True
         )
         val_loader = torch.utils.data.DataLoader(
-            optDataset(self.optmodel, x_val, y_val),
+            TensorDataset(torch.from_numpy(x_val).float(), torch.from_numpy(y_val).float()),
             batch_size=self.batch_size, shuffle=False
         )
         epoch_times = []

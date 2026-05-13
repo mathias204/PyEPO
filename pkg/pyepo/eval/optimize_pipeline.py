@@ -171,7 +171,7 @@ class PredictOptimizePipeline:
                         
                     else:
                         print(f"Training {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
-                        predictor, info = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+                        predictor, info = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'), seed=run)
 
                         start_time = time.perf_counter()
                         result = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'))
@@ -182,32 +182,32 @@ class PredictOptimizePipeline:
                         self.results[model_name][idx, run] = info
                         self._save_cached_model(cache_filepath, predictor, info)
 
-    def _initialize_and_train(self, config, x_train, c_train, x_val, c_val, optmodel, m_train = None, m_val = None):
+    def _initialize_and_train(self, config, x_train, c_train, x_val, c_val, optmodel, m_train = None, m_val = None, seed = None):
         """Handles specific model instantiation and training logic."""
 
         params = config.get('params').copy()
         match config["type"]:
             case WeightingTypeFunction.NEAREST_NEIGHBOUR:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(NearestPrediction, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
+                return finetune_predictive_prescription(NearestPrediction, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
             
             case WeightingTypeFunction.LOESS:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(LOESS, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
+                return finetune_predictive_prescription(LOESS, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
             
             case WeightingTypeFunction.KERNEL:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(KernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
+                return finetune_predictive_prescription(KernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
             
             case WeightingTypeFunction.RKERNEL:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
+                return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
             
             case WeightingTypeFunction.CART:
                 feats = np.concatenate((x_train, x_val), axis=0)
                 costs = np.concatenate((c_train, c_val), axis=0)
                 start_time = time.perf_counter()
-                model = CartPrescription(feats, costs, optmodel)
+                model = CartPrescription(feats, costs, optmodel, seed=seed)
                 end_time = time.perf_counter()
                 training_info = {"training_time": end_time - start_time}
                 return model, training_info
@@ -216,14 +216,14 @@ class PredictOptimizePipeline:
                 feats = np.concatenate((x_train, x_val), axis=0)
                 costs = np.concatenate((c_train, c_val), axis=0)
                 start_time = time.perf_counter()
-                model = SAA(feats, costs, optmodel)
+                model = SAA(feats, costs, optmodel, seed=seed)
                 end_time = time.perf_counter()
                 training_info = {"training_time": end_time - start_time}
                 return model, training_info
         
             case WeightingTypeFunction.RANDOM_FOREST:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val)
+                return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
         
             case WeightingTypeFunction.NEURAL:
                 feats = np.concatenate((x_train, x_val), axis=0)
@@ -241,6 +241,7 @@ class PredictOptimizePipeline:
                     weight_model_param_grid,
                     train_param_grid,
                     loss_type,
+                    seed=seed,
                 )
             
             case WeightingTypeFunction.NEURAL_GROUPED:
@@ -261,7 +262,8 @@ class PredictOptimizePipeline:
                     loss_type,
                     grouped=True,
                     m_train=m_train,
-                    m_val=m_val
+                    m_val=m_val,
+                    seed=seed
                 )
             
             case WeightingTypeFunction.NEURAL_DFL:
@@ -278,7 +280,8 @@ class PredictOptimizePipeline:
                     optmodel,
                     weight_model_param_grid,
                     train_param_grid,
-                    loss_type
+                    loss_type,
+                    seed=seed
                 )
             
             case _:

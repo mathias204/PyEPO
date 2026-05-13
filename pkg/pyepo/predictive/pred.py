@@ -25,13 +25,14 @@ class PredictivePrescription(Predictor):
     """
     This is an abstract class for predicitive prescription model
     """
-    def __init__(self, model, features, costs):
+    def __init__(self, model, features, costs, seed=None):
         self.features_unadjusted = features
         self.costs_unadjusted = costs
         if features.ndim == 3:
             features = features.reshape(-1, features.shape[-1])
             costs = costs.reshape(-1) 
         
+        self.seed = seed
         self.features = features
         self.costs = costs
         self.model: optModel = model
@@ -48,7 +49,8 @@ class PredictivePrescription(Predictor):
         if len(self.features) <= max_samples:
             return self.features, self.costs
 
-        idx = np.random.choice(len(self.features), size=max_samples, replace=False)
+        rng = np.random.default_rng(self.seed)
+        idx = rng.choice(len(self.features), size=max_samples, replace=False)
 
         self.features = self.features[idx]
         self.costs = self.costs[idx]

@@ -1,6 +1,4 @@
 import time
-from pyepo.predictive.neural import LossType
-from pyepo.func.surrogate import SPOPlus
 from pyepo.predictive.pred import PredictivePrescription, Predictor
 from pyepo.predictive.weight_predictor import MLPWeightPredictor
 from pyepo.predictive.neural import NeuralPrediction, GroupedNeuralPrediction
@@ -56,7 +54,8 @@ def finetune_predictive_prescription(
     optmodel,
     param_grid,
     model_kwargs=None,
-    m_val=None
+    m_val=None,
+    seed=None
 ):
     if model_kwargs is None:
         model_kwargs = {}
@@ -74,6 +73,7 @@ def finetune_predictive_prescription(
             x_train,
             c_train,
             optmodel,
+            seed=seed,
             **params,
             **model_kwargs,
         )
@@ -88,7 +88,7 @@ def finetune_predictive_prescription(
     costs = np.concatenate((c_train, c_val), axis=0)
     start_time = time.perf_counter()
     
-    best_model = model_cls(feats, costs, optmodel, **best_params, **model_kwargs)
+    best_model = model_cls(feats, costs, optmodel, seed=seed, **best_params, **model_kwargs)
     
     end_time = time.perf_counter()
     
@@ -107,6 +107,7 @@ def finetune_neural_prescription(
     grouped: bool = False,
     m_train = None,
     m_val = None,
+    seed = None
 ):
 
     best_score = np.inf
@@ -137,6 +138,7 @@ def finetune_neural_prescription(
                     costs,
                     optmodel,
                     weight_model,
+                    seed=seed
                 )
             else:
                 predictor = NeuralPrediction(
@@ -144,6 +146,7 @@ def finetune_neural_prescription(
                     costs,
                     optmodel,
                     weight_model,
+                    seed=seed
                 )
 
             val_loss, train_info = predictor.train_model(
@@ -165,7 +168,7 @@ def finetune_neural_prescription(
 
 
 class EarlyStopper:
-    def __init__(self, patience=1, min_delta=0):
+    def __init__(self, patience=15, min_delta=0.01):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -173,7 +176,7 @@ class EarlyStopper:
         self.best_state_dict = None
 
     def step(self, validation_loss, model):
-        if validation_loss < self.min_validation_loss - self.min_delta:
+        if validation_loss < self.min_validation_loss * (1 - self.min_delta):
             self.min_validation_loss = validation_loss
             self.counter = 0
             self.best_state_dict = copy.deepcopy(model.state_dict())

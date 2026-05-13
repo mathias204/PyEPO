@@ -19,8 +19,8 @@ class LossType(Enum):
 
 class NeuralPrediction(PredictivePrescription):
 
-    def __init__(self, feats, costs, model, weight_model, verbose = False):
-        super().__init__(model, feats, costs)
+    def __init__(self, feats, costs, model, weight_model, verbose = False, seed=None):
+        super().__init__(model, feats, costs, seed)
         self.weight_model: nn.Module = weight_model
         self.verbose = verbose
 
@@ -126,8 +126,14 @@ class NeuralPrediction(PredictivePrescription):
     
 
     def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+        g = torch.Generator()
+        if self.seed is not None:
+            g = g.manual_seed(self.seed)
+            torch.manual_seed(self.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(self.seed)
         X_train, X_val, y_train, y_val = train_test_split(
-            self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=0
+            self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=self.seed
         )
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
@@ -139,7 +145,7 @@ class NeuralPrediction(PredictivePrescription):
 
         train_loader = torch.utils.data.DataLoader(
             optDatasetPP(self.model, X_train, y_train),
-            batch_size=batch_size, shuffle=True
+            batch_size=batch_size, shuffle=True, generator=g
         )
         val_loader = torch.utils.data.DataLoader(
             optDatasetPP(self.model, X_val, y_val),
@@ -159,7 +165,7 @@ class NeuralPrediction(PredictivePrescription):
 
             self.weight_model = self.weight_model.cuda()
 
-        early_stopper = EarlyStopper(10, 0)
+        early_stopper = EarlyStopper(15, 0.01)
 
         epoch_times = []
 
@@ -270,8 +276,14 @@ class GroupedNeuralPrediction(NeuralPrediction):
         return spo_plus(y_hat, true_costs, true_sols, true_objs)   
 
     def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+        g = torch.Generator()
+        if self.seed is not None:
+            g = g.manual_seed(self.seed)
+            torch.manual_seed(self.seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(self.seed)
         X_train, X_val, y_train, y_val = train_test_split(
-            self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=0
+            self.features_unadjusted, self.costs_unadjusted, test_size=val_split, random_state=self.seed
         )
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
@@ -285,7 +297,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
         train_loader = torch.utils.data.DataLoader(
             optDatasetSharedPP(self.model, X_train, y_train, self.features_unadjusted.shape[1]),
-            batch_size=batch_size, shuffle=True
+            batch_size=batch_size, shuffle=True, generator=g
         )
         val_loader = torch.utils.data.DataLoader(
             optDatasetSharedPP(self.model, X_val, y_val, self.features_unadjusted.shape[1]),
@@ -301,7 +313,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
             self.weight_model = self.weight_model.cuda()
 
-        early_stopper = EarlyStopper(10, 0)
+        early_stopper = EarlyStopper(15, 0.01)
 
         epoch_times = []
 

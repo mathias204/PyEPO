@@ -6,9 +6,8 @@ import signal
 from multiprocessing import Process, Queue
 
 class KernelPrescription(PredictivePrescription):
-    def __init__(self, feats, costs, model, k, kernel, random_state=None):
-        super().__init__(model, feats, costs)
-        self.random_state = random_state
+    def __init__(self, feats, costs, model, k, kernel, seed=None):
+        super().__init__(model, feats, costs, seed)
         self.k = min(k, len(feats))
         self.kernel = kernel
 
@@ -70,8 +69,8 @@ def kd_query_worker(features, k, queue):
     queue.put(dists)
 
 class RecursiveKernelPrescription(KernelPrescription):
-    def __init__(self, feats, costs, model, k, kernel, random_state=None):
-        super().__init__(feats, costs, model, k, kernel, random_state)
+    def __init__(self, feats, costs, model, k, kernel, seed=None):
+        super().__init__(feats, costs, model, k, kernel, seed)
         self.train_model()
 
     def train_model(self):

@@ -8,8 +8,8 @@ from scipy import linalg
 
 class LOESS(PredictivePrescription):
 
-    def __init__(self, feats, costs, model, k, kernel):
-        super().__init__(model, feats, costs)
+    def __init__(self, feats, costs, model, k, kernel, seed=None):
+        super().__init__(model, feats, costs, seed)
 
         self.k = min(k, len(self.features))
         self.tree = cKDTree(self.features)

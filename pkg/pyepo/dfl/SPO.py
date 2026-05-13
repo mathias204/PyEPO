@@ -6,7 +6,7 @@ from pyepo.func.surrogate import SPOPlus
 from pyepo import EPO
 
 from pyepo.dfl.predictor import Predictor
-from pyepo.dfl.utils import EarlyStopper
+from pyepo.dfl.utils import EarlyStopper, set_seeds
 from pyepo.dfl.DFLMaker import DFLMaker
 import time
 
@@ -18,16 +18,19 @@ class SPODecisionMaker(DFLMaker):
         batch_size: int = 32,
         lr: float = 1e-3,
         epochs: int = 1000,
+        seed: int | None = None,
     ) -> None:
         self.predictor = predictor
         self.batch_size = batch_size
         self.num_epochs = epochs
         self.learning_rate = lr
         self.optmodel = optmodel
-        self.early_stopper = EarlyStopper(patience=10, min_delta=0)
-        self.spo_plus = SPOPlus(self.optmodel, processes=0)
+        self.early_stopper = EarlyStopper(patience=15, min_delta=0.01)
+        self.spo_plus = SPOPlus(self.optmodel, processes=1)
 
         self._set_optimizer()
+        set_seeds(seed)
+    
 
     def _set_optimizer(self) -> None:
         """

@@ -4,8 +4,8 @@ import numpy as np
 
 class NearestPrediction(PredictivePrescription):
 
-    def __init__(self, feats, costs, model, k):
-        super().__init__(model, feats, costs)
+    def __init__(self, feats, costs, model, k, seed=None):
+        super().__init__(model, feats, costs, seed=seed)
         self.k = min(k, len(self.features)-1)
 
         self.tree = cKDTree(self.features)

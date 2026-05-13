@@ -3,12 +3,12 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor
 
 class RandomForestPrescription(PredictivePrescription):
-    def __init__(self, feats, costs, model, n_est, depth, random_state=None):
-        super().__init__(model, feats, costs)
+    def __init__(self, feats, costs, model, n_est, depth, seed=None):
+        super().__init__(model, feats, costs, seed)
         rf_model = RandomForestRegressor(
             n_estimators=n_est,
             max_depth=depth,
-            random_state=random_state,
+            random_state=self.seed,
             n_jobs=-1
         )
         rf_model.fit(self.features, self.costs)

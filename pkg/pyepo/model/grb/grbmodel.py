@@ -111,6 +111,8 @@ class optGrbModel(optModel):
         # Build or retrieve objective terms from cache
         obj_terms = []
         for i in range(len(w)):
+            if w[i] <= 1e-6:
+                continue  # skip zero-weight terms
             key = self._hash_cost(c[i])
             if key not in self._objective_cache:
                 self._objective_cache[key] = self._objective_fun(c[i])

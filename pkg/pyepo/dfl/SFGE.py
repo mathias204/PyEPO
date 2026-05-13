@@ -6,7 +6,7 @@ from pyepo.model.opt import optModel
 from pyepo import EPO
 
 from pyepo.dfl.noisifier import Noisifier
-from pyepo.dfl.utils import EarlyStopper
+from pyepo.dfl.utils import EarlyStopper, set_seeds
 from pyepo.dfl.DFLMaker import DFLMaker
 
 class SFGEDecisionMaker(DFLMaker):
@@ -28,6 +28,7 @@ class SFGEDecisionMaker(DFLMaker):
         standardize_loss: bool = True,
         epochs: int = 1000,
         num_samples: int = 1,           # Variable S
+        seed: int | None = None,
     ) -> None:
         self.num_samples = num_samples
         self.standardize_loss = standardize_loss
@@ -36,8 +37,9 @@ class SFGEDecisionMaker(DFLMaker):
         self.learning_rate = lr
         self.noisifier = noisifier
         self.optmodel = optmodel
-        self.early_stopper = EarlyStopper(patience=50, min_delta=0)
+        self.early_stopper = EarlyStopper(patience=15, min_delta=0.01)
         self._set_optimizer()
+        set_seeds(seed)
 
     def _set_optimizer(self) -> None:
         """
