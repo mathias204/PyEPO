@@ -1,3 +1,7 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PyDFLT/PyDFLT
+"""
 from pyepo.data.gen_wsmc_data import gen_data_wsmc
 import gurobipy as gp
 from gurobipy import GRB
@@ -5,15 +9,13 @@ import numpy as np
 from pyepo.model.grb import optGrbModel
 from sklearn.model_selection import train_test_split
 import torch
-from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
-from pyepo.predictive import KernelPrescription, LossType
+from pyepo.predictive import LossType
+from pyepo.hyperparameters import k_param_grid, kernel_param_grid, rf_param_grid, weight_model_param_grid, train_param_grid, dfl_model_param_grid
 
 import random
 from itertools import chain, combinations
-
-#TODO: check the recovery ratio thing, I do not currently use it
 
 class WeightedSetMultiCover(optGrbModel):
     """
@@ -29,9 +31,9 @@ class WeightedSetMultiCover(optGrbModel):
         penalty: float,
         cover_costs_lb: int,
         cover_costs_ub: int,
-        recovery_ratio: float = 0,
+        recovery_ratio: float = 0.8,
         seed: int = 5,
-        silvestri2024: bool = True,
+        silvestri2024: bool = False,
         density: float = 0.25,
         num_scenarios: int = 1,
     ):
@@ -44,8 +46,8 @@ class WeightedSetMultiCover(optGrbModel):
             penalty (float): Penalty for unmet coverage requirements.
             cover_costs_lb (int): Lower bound for cover costs.
             cover_costs_ub (int): Upper bound for cover costs.
-            recovery_ratio (float): Ratio for recovering costs from unused covers. Defaults to 0.
-            seed (int): Random seed for reproducible generation. Defaults to 0.
+            recovery_ratio (float): Ratio for recovering costs from unused covers. Defaults to 0.8.
+            seed (int): Random seed for reproducible generation. Defaults to 5.
             silvestri2024 (bool): Whether to use silvestri2024 parameter generation method. Defaults to False.
             density (float): Density of the item-cover matrix when using silvestri2024 method. Defaults to 0.25.
             num_scenarios (int): Number of scenarios for multi-scenario optimization. Defaults to 1.
@@ -88,7 +90,6 @@ class WeightedSetMultiCover(optGrbModel):
         """
         # Create a GP model
         gp_model = gp.Model("wsmc")
-        vars_dict = {}
         second_stage_vars_dict = {}
 
         # Define variables
@@ -97,6 +98,13 @@ class WeightedSetMultiCover(optGrbModel):
         # Unmet coverage based on cover selection
         y = gp_model.addMVar((self.num_items, self.num_scenarios), vtype=GRB.INTEGER, name="unmet_coverage")
         second_stage_vars_dict["unmet_coverage"] = y
+
+        if self.recovery_ratio > 0:  # Excess coverage that is not needed
+            z = gp_model.addMVar((self.num_items, self.num_scenarios), vtype=GRB.INTEGER, name="excess_coverage")
+            second_stage_vars_dict["excess_coverage"] = z
+
+            gp_model.addConstrs(z[i, k] <= x[i] for i in range(self.num_items) for k in range(self.num_scenarios))
+
 
         # It is a minimization problem
         gp_model.modelSense = GRB.MINIMIZE
@@ -107,12 +115,18 @@ class WeightedSetMultiCover(optGrbModel):
     
     def _update_second_stage_vars(self, required_scenarios: int):
         """
-        Updates the unmet_coverage variables if the number of scenarios has changed.
+        Updates the second stage variables if the number of scenarios has changed.
         """
         if self.num_scenarios != required_scenarios:
             # Remove old variables if they exist
             if "unmet_coverage" in self.second_stage_vars_dict:
                 self._model.remove(self.second_stage_vars_dict["unmet_coverage"])
+
+            if self.recovery_ratio > 0 and "excess_coverage" in self.second_stage_vars_dict:
+                self._model.remove(self.second_stage_vars_dict["excess_coverage"])
+            
+            # Force Gurobi to process the removals before adding new vars
+            self._model.update()
             
             # Update the scenario count
             self.num_scenarios = required_scenarios
@@ -124,35 +138,51 @@ class WeightedSetMultiCover(optGrbModel):
                 name="unmet_coverage"
             )
             self.second_stage_vars_dict["unmet_coverage"] = new_y
-            
-            # Update model to integrate new variables
-            self._model.update()
 
+            if self.recovery_ratio > 0:
+                new_z = self._model.addMVar(
+                    (self.num_items, self.num_scenarios), 
+                    vtype=GRB.INTEGER, 
+                    name="excess_coverage"
+                )
+                self.second_stage_vars_dict["excess_coverage"] = new_z
+
+    
     def setObj(self, cover_requirements: np.ndarray) -> None:
         # Check if we need to resize y for a single scenario
         self._update_second_stage_vars(1)
-        
+
+        if isinstance(cover_requirements, torch.Tensor):
+            cover_requirements = cover_requirements.detach().cpu().numpy()
+
         x = self.x
         y = self.second_stage_vars_dict["unmet_coverage"]
 
-        # Objective: /1 is redundant but keeps logic consistent
-        obj = (self.cover_costs @ x) + gp.quicksum(
-            self.penalty * self.max_cover_costs[i] * y[i, 0]
-            for i in range(self.num_items)
-        )
+        # Vectorized objective: self.penalty * self.max_cover_costs is element-wise multiplied with y[:, 0]
+        # then we take the inner product via @
+        obj_penalty_coeffs = self.penalty * self.max_cover_costs
+        obj = (self.cover_costs @ x) + (obj_penalty_coeffs @ y[:, 0])
         self._model.setObjective(obj)
 
         # Remove existing constraints
         self._model.remove(self._model.getConstrs())
 
+        # Vectorized matrix-vector multiplication for the baseline coverage
+        # shape: (num_items,) -> we broadcast/reshape to handle the scenario dimension below
+        base_coverage = self.item_cover_matrix @ x
 
-        self._model.addConstrs(
-            gp.quicksum(self.item_cover_matrix[i, j] * x[j] for j in range(self.num_covers)) + y[i, k] >= cover_requirements[i]
-            for i in range(self.num_items)
-            for k in range(self.num_scenarios)
-        )
+        if self.recovery_ratio > 0:
+            z = self.second_stage_vars_dict["excess_coverage"]
+            
+            # Slice x to extract only the single item covers
+            self._model.addConstr(z <= x[:self.num_items, np.newaxis])
+            
+            # Base coverage is broadcasted across columns
+            self._model.addConstr(base_coverage[:, np.newaxis] + y - z >= cover_requirements[:, np.newaxis])
+        else:
+            self._model.addConstr(base_coverage[:, np.newaxis] + y >= cover_requirements[:, np.newaxis])
 
-    def setWeightObj(self, w, c):
+    def setWeightObj(self, w: np.ndarray, c: np.ndarray) -> None:
         """
         Set a weighted objective for predictive prescriptions.
 
@@ -165,21 +195,38 @@ class WeightedSetMultiCover(optGrbModel):
         x = self.x
         y = self.second_stage_vars_dict["unmet_coverage"]
 
-        # Set objective (there are no first stage constraints in this problem)
-        obj = gp.quicksum(self.cover_costs[j] * x[j] for j in range(self.num_covers)) + gp.quicksum(
-            self.penalty * self.max_cover_costs[i] * y[i, k] * w[k] for i in range(self.num_items) for k in range(self.num_scenarios)
-        )
+        # 1. Vectorized Objective Function
+        # Compute the 2D matrix of penalty coefficients matching y's shape (num_items, num_scenarios)
+        # self.max_cover_costs is (num_items,), w is (num_scenarios,)
+        # np.outer creates a (num_items, num_scenarios) matrix of their combinations
+        penalty_matrix = self.penalty * np.outer(self.max_cover_costs, w)
+        
+        # Flatten both the penalty matrix and the MVar y to take a clean inner product
+        obj = (self.cover_costs @ x) + (penalty_matrix.flatten() @ y.reshape(-1))
         self._model.setObjective(obj)
 
         # Remove existing constraints
         self._model.remove(self._model.getConstrs())
 
+        # 2. Vectorized Constraints
+        # Precompute the base coverage matrix multiplication: shape (num_items,)
+        base_coverage = self.item_cover_matrix @ x
+        
+        # Transpose c from (num_scenarios, num_items) to (num_items, num_scenarios) to match y and z
+        c_transposed = c.T
 
-        self._model.addConstrs(
-            gp.quicksum(self.item_cover_matrix[i, j] * x[j] for j in range(self.num_covers)) + y[i, k] >= c[k, i]
-            for i in range(self.num_items)
-            for k in range(self.num_scenarios)
-        )
+        if self.recovery_ratio > 0:
+            z = self.second_stage_vars_dict["excess_coverage"]
+            
+            # z[i, k] <= x[i] broadcasted over all scenarios k
+            self._model.addConstr(z <= x[:self.num_items, np.newaxis])
+            
+            # base_coverage is (num_items, 1), y and z are (num_items, num_scenarios)
+            self._model.addConstr(base_coverage[:, np.newaxis] + y - z >= c_transposed)
+
+        else:
+            self._model.addConstr(base_coverage[:, np.newaxis] + y >= c_transposed)
+
 
     def cal_obj(self, c, x):
         if isinstance(c, torch.Tensor):
@@ -315,35 +362,35 @@ class WeightedSetMultiCover(optGrbModel):
     
 
 
-def wsmc_generator_factory(num_feat=5, num_item=10, num_sets=25):
+def wsmc_generator_factory(num_feat=5, num_item=5, num_sets=25):
     def generator(num_data, seed=42):
         x, c = gen_data_wsmc(seed=seed, num_data=num_data, num_features=num_feat, num_items=num_item, degree=5, noise_width=0.5)
 
-        x_tmp, x_test, c_tmp, c_test = train_test_split(
-            x, c, test_size=0.1, random_state=0 
+        x_train, x_tmp, c_train, c_tmp = train_test_split(
+            x, c, test_size=0.2, random_state=seed 
         )
 
-        x_train, x_val, c_train, c_val = train_test_split(
-            x_tmp, c_tmp, test_size=0.11, random_state=0 
+        x_val, x_test, c_val, c_test = train_test_split(
+            x_tmp, c_tmp, test_size=0.5, random_state=seed
         )
 
         optmodel = WeightedSetMultiCover(
             num_items=num_item,
             num_covers=num_sets,
             penalty=5,
-            cover_costs_lb=1,
-            cover_costs_ub=10,
-            recovery_ratio=0, #TODO: in paper this was 0.8
-            seed=42,
-            silvestri2024=True,
-            density=0.25,
+            cover_costs_lb=5,
+            cover_costs_ub=50,
+            recovery_ratio=0.8, 
+            seed=seed,
+            silvestri2024=False,
             num_scenarios=len(x_train)
         )
         return x_train, c_train, x_val, c_val, x_test, c_test, optmodel, {}
     return generator
 
 if __name__ == "__main__":
-    sizes = np.linspace(20, 20, 1).astype(int)
+    gp.setParam("OutputFlag", 0)
+    sizes = np.linspace(500, 500, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -351,50 +398,23 @@ if __name__ == "__main__":
         num_runs=5
     )
 
-    k_param_grid = {
-        "k": [1, 3, 5, 10],
-    }
-    
-    kernel_param_grid = {
-        **k_param_grid,
-        "kernel" : [
-            KernelPrescription._naive_kernel,
-            KernelPrescription._epanechnikov_kernel,
-            KernelPrescription._tricubic_kernel,
-        ]
-    }
-
-    rf_param_grid = {
-        "n_est": [50, 100, 200],
-        "depth": [5, 10, 20, None],
-    }
-
-    weight_model_param_grid = {
-        "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [0,1,2],
-    }
-
     train_param_grid = {
-        "epochs": [1000],
+        **train_param_grid,
+        "epochs": [5000],
         "batch_size": [32],
-        "lr": [1e-3, 5e-4],
-    }
-
-    dfl_model_param_grid = {
-        "hidden_dim": [32, 64, 128],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [0,1,2],
     }
 
     pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
     pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
-    pipeline.add_model(r'$z^{SFGE}(x)$',  WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
+    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
 
+    pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$z^{MSE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.MSE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
-    pipeline.execute(save_dir="saved_models/wsmc/")
-    # pipeline.plot_results('results/wsmc/wsmc_regret.png', 'Knapsack Benchmark Regret')
-    pipeline.plot_boxplot(sizes[0], 'results/wsmc/wsmc_boxplot.png', 'Knapsack Benchmark Boxplot')
-    # pipeline.plot_weight_distribution(150, 'results/wsmc/wsmc_weights.png', 'Knapsack Weight distribution')
+    # Run and plot
+    pipeline.execute(save_dir="saved_models/wsmc/", force_run=True)
+    pipeline.save_results_to_csv('results/wsmc/optimize_results.csv')
+    pipeline.plot_boxplot(sizes[0], 'results/wsmc/wsmc_boxplot.png', 'Weighted Set Multi-Cover Benchmark Boxplot')

@@ -1,13 +1,17 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PredOpt/predopt-benchmarks
+"""
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
 from pyepo.model.grb import optGrbModel
 from sklearn.model_selection import train_test_split
 import torch
-from torch import nn
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
-from pyepo.predictive import KernelPrescription, LossType
+from pyepo.predictive import LossType
+from pyepo.hyperparameters import k_param_grid, kernel_param_grid, rf_param_grid, weight_model_param_grid, train_param_grid, dfl_model_param_grid
 import networkx as nx
 from pyepo.data.shortestpath import genData
 
@@ -18,7 +22,7 @@ for i in V:
     if (i+1)%5 !=0:
         E.append((i,i+1))
     if i+5<25:
-            E.append((i,i+5))
+        E.append((i,i+5))
 
 G = nx.DiGraph()
 G.add_nodes_from(V)
@@ -91,18 +95,18 @@ class ShortestPathModel(optGrbModel):
         else:
             raise ValueError(f"Unsupported x shape {x.shape}")
         
-def shortest_path_generator_factory(num_feat=5):
+def shortest_path_generator_factory(deg= 4, num_feat=5):
     def generator(num_data, seed=42):
         x, c = genData(
-            num_data, num_feat, (5,5), deg=4, noise_width=0.5, seed=seed
+            num_data, num_feat, (5,5), deg=deg, noise_width=0.5, seed=seed
         )
 
-        x_tmp, x_test, c_tmp, c_test = train_test_split(
-            x, c, test_size=0.1, random_state=0 
+        x_train, x_tmp, c_train, c_tmp = train_test_split(
+            x, c, test_size=0.2, random_state=seed 
         )
 
-        x_train, x_val, c_train, c_val = train_test_split(
-            x_tmp, c_tmp, test_size=0.11, random_state=0 
+        x_val, x_test, c_val, c_test = train_test_split(
+            x_tmp, c_tmp, test_size=0.5, random_state=seed
         )
 
         optmodel = ShortestPathModel(G)
@@ -111,69 +115,32 @@ def shortest_path_generator_factory(num_feat=5):
 
 
 if __name__ == "__main__":
-    sizes = np.linspace(10, 350, 15).astype(int)
-    sizes = np.linspace(200, 200, 1).astype(int)
+    gp.setParam("OutputFlag", 0)
+
+    degrees = [1,2,4,6,8]
+    sizes = np.linspace(500, 500, 1).astype(int)
     
-    pipeline = PredictOptimizePipeline(
-        data_sizes=sizes, 
-        data_generator=shortest_path_generator_factory(),
-        num_runs=5
-    )
+    for degree in degrees:
+        pipeline = PredictOptimizePipeline(
+            data_sizes=sizes, 
+            data_generator=shortest_path_generator_factory(deg=degree),
+            num_runs=5
+        )
 
-    k_param_grid = {
-        "k": [1, 3, 5, 10],
-    }
-    
-    kernel_param_grid = {
-        **k_param_grid,
-        "kernel" : [
-            KernelPrescription._naive_kernel,
-            KernelPrescription._epanechnikov_kernel,
-            KernelPrescription._tricubic_kernel,
-        ]
-    }
+        # Register models to benchmark
+        pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
+        pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = kernel_param_grid)
+        pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+        pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
+        pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+        pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
+        pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
 
-    rf_param_grid = {
-        "n_est": [50, 100, 200],
-        "depth": [5, 10, 20, None],
-    }
+        pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+        pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+        pipeline.add_model(r'$z^{MSE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.MSE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
-    weight_model_param_grid = {
-        "hidden_dim": [32, 64],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [1,2],
-    }
-
-    train_param_grid = {
-        "epochs": [1000],
-        "batch_size": [32],
-        "lr": [1e-3, 5e-4],
-    }
-
-    dfl_model_param_grid = {
-        "hidden_dim": [32, 64],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [1,2],
-    }
-
-    # Register models to benchmark
-    pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
-    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
-
-    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
-    pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
-
-    # Run and plot
-    pipeline.execute(save_dir="saved_models/shortest_path/")
-    # pipeline.plot_results('results/shortest_path/shortest_path_linear_regret.png', 'Shortest Path Benchmark Regret')
-    # pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/shortest_path/test.png', 'Shortest Path Benchmark Barchart')
-    pipeline.plot_boxplot(sizes[0], 'results/shortest_path/shortest_path_linear_boxplot.png', 'Shortest Path Benchmark Boxplot')
-    # pipeline.plot_weight_distribution(150, 'results/shortest_path/shortest_path_weights.png', 'Shortest Path Weight distribution')
+        # Run and plot
+        pipeline.execute(save_dir=f"saved_models/shortest_path/degree_{degree}/", force_run=True)
+        pipeline.save_results_to_csv(f'results/shortest_path/degree_{degree}/shortest_path_results.csv')
+        pipeline.plot_boxplot(sizes[0], f'results/shortest_path/degree_{degree}/shortest_path_boxplot.png', f'Shortest Path Benchmark Boxplot Degree {degree}')

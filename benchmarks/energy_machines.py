@@ -1,4 +1,7 @@
-
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PredOpt/predopt-benchmarks
+"""
 from gurobipy import GRB
 from pyepo.model.grb import optGrbModel
 import gurobipy as gp
@@ -6,8 +9,9 @@ import numpy as np
 from pyepo.data.energy import get_data, get_instance_config
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
-from pyepo.predictive import KernelPrescription, LossType
+from pyepo.predictive import LossType
 import torch
+from pyepo.hyperparameters import k_param_grid, kernel_param_grid, rf_param_grid, weight_model_param_grid, dfl_model_param_grid, train_param_grid
 
 class SolveICON(optGrbModel):
     # nbMachines: number of machine
@@ -45,14 +49,6 @@ class SolveICON(optGrbModel):
         self.method = method
 
         super().__init__()
-
-    # @property
-    # def num_cost(self):
-    #     """
-    #     number of cost to be predicted
-    #     """
-    #     return self.nbTasks
-       
         
     def _getModel(self):
         Machines = range(self.nbMachines)
@@ -60,47 +56,55 @@ class SolveICON(optGrbModel):
         Resources = range(self.nbResources)
 
         MC = self.MC
-        U =  self.U
+        U = self.U
         D = self.D
         E = self.E
         L = self.L
-        P = self.P
-        idle = self.idle
-        up = self.up
-        down = self.down
-        relax = self.relax
-        q= self.q
-        N = 1440//q
+        q = self.q
+        N = 1440 // q
+        self.N = N
+
+        V = self.nbTasks * self.nbMachines * N
 
         M = gp.Model("icon")
+        M.modelSense = GRB.MINIMIZE
+
         if not self.verbose:
             M.setParam('OutputFlag', 0)
-        if relax:
-            x = M.addVars(Tasks, Machines, range(N), lb=0., ub=1., vtype=GRB.CONTINUOUS, name="x")
-        else:
-            x = M.addVars(Tasks, Machines, range(N), vtype=GRB.BINARY, name="x")
 
+        vtype = GRB.CONTINUOUS if self.relax else GRB.BINARY
+        
+        # Flat decision variable
+        x = M.addVars(V, lb=0., ub=1., vtype=vtype, name="x")
 
-        M.addConstrs( x.sum(f,'*',range(E[f])) == 0 for f in Tasks)
-        M.addConstrs( x.sum(f,'*',range(L[f]-D[f]+1,N)) == 0 for f in Tasks)
-        M.addConstrs(( gp.quicksum(x[(f,m,t)] for t in range(N) for m in Machines) == 1  for f in Tasks))
+        # Helper function to map 3D coordinates to the flat 1D index
+        def flat_idx(f, m, t):
+            return f * (self.nbMachines * N) + m * N + t
 
-        # capacity requirement
+        # Adjusted constraints using the flat index
+        for f in Tasks:
+            M.addConstr(gp.quicksum(x[flat_idx(f, m, t)] for m in Machines for t in range(E[f])) == 0)
+            
+            start_limit = L[f] - D[f] + 1
+            M.addConstr(gp.quicksum(x[flat_idx(f, m, t)] for m in Machines for t in range(start_limit, N)) == 0)
+            
+            M.addConstr(gp.quicksum(x[flat_idx(f, m, t)] for m in Machines for t in range(N)) == 1)
+
+        # Capacity requirement constraints
         for r in Resources:
             for m in Machines:
                 for t in range(N):
-                    M.addConstr( gp.quicksum( gp.quicksum(x[(f,m,t1)]  for t1 in range(max(0,t-D[f]+1),t+1) )*
-                                   U[f][r] for f in Tasks) <= MC[m][r])   
-        # M = M.presolve()
+                    M.addConstr(
+                        gp.quicksum(
+                            x[flat_idx(f, m, t1)] * U[f][r]
+                            for f in Tasks
+                            for t1 in range(max(0, t - D[f] + 1), t + 1)
+                        ) <= MC[m][r]
+                    )
+
         M.update()
         self.model = M
-
-        # self.x = dict()
-        # for var in M.getVars():
-        #     name = var.varName
-        #     if name.startswith('x['):
-        #         (f,m,t) = map(int, name[2:-1].split(','))
-        #         self.x[(f,m,t)] = var
+        self.x = x
 
         return M, x
 
@@ -116,105 +120,95 @@ class SolveICON(optGrbModel):
             c = c.detach().cpu().numpy()
         else:
             c = np.asarray(c, dtype=np.float32)
+
+        if c.shape[-1] != len(self.x):
+            c = self.transform_prediction(c)
         self._model.setObjective(self._objective_fun(c))
 
     def cal_obj(self, price, x):
         """
         Calculates the objective value for the scheduling problem.
-        Supports price as (N,) or (B, N) and x as (Tasks, Machines, N) or (B, Tasks, Machines, N).
+        Supports price as (N,) or (B, N) and x as flat arrays or multi-dimensional grids.
         """
-        # 1. Standardize inputs to numpy for calculation
-        def to_numpy(data):
-            if isinstance(data, torch.Tensor):
-                return data.detach().cpu().numpy()
-            return np.asarray(data, dtype=np.float32)
-
-        price = to_numpy(price)
-        x = to_numpy(x)
-        
-        # Retrieve constants from your class instance
-        P = np.array(self.P)    # Power consumption per task
-        D = np.array(self.D)    # Duration per task
-        q = self.q
-        N = price.shape[-1]
-        
-        # 2. Pre-calculate the 'Cost of starting task f at time t'
-        # For each task f, we need a sliding window sum of 'price' with window size D[f]
-        # We can use np.convolve or a simple loop since D varies per task
-        
-        # price_kernels shape: (Tasks, N)
-        # entry (f, t) is the sum of prices from t to t + D[f]
-        if price.ndim == 1:
-            price_kernels = np.array([
-                np.convolve(price, np.ones(D[f]), mode='valid')[:N-D[f]+1] 
-                for f in range(self.nbTasks)
-            ], dtype=object) 
-        else: # Batch mode (B, N)
-            # Handle batching via list comprehension or vectorized operations
-            price_kernels = []
-            for b in range(price.shape[0]):
-                b_kernels = [np.convolve(price[b], np.ones(D[f]), mode='valid')[:N-D[f]+1] 
-                            for f in range(self.nbTasks)]
-                price_kernels.append(b_kernels)
-            price_kernels = np.array(price_kernels)
-
-        # 3. Calculate Objective based on x shape
-        if x.ndim == 1:
-            # reshape x to (Tasks, Machines, N) if it's flat
-            x = x.reshape(self.nbTasks, self.nbMachines, N)
-        # Case 1: x is (Tasks, Machines, N)
-        if x.ndim == 3:
-            total_cost = 0
-            for f in range(self.nbTasks):
-                # Sum over machines for task f: (N,)
-                x_f = np.sum(x[f, :, :N-D[f]+1], axis=0)
-                # Cost = x_f * price_sum * Power * (q/60)
-                total_cost += np.sum(x_f * price_kernels[f] * P[f])
-            return total_cost * (q / 60)
-
-        # Case 2: x is (B, Tasks, Machines, N)
-        elif x.ndim == 4:
-            batch_size = x.shape[0]
-            batch_costs = np.zeros(batch_size)
-            for b in range(batch_size):
-                b_cost = 0
-                for f in range(self.nbTasks):
-                    x_f = np.sum(x[b, f, :, :N-D[f]+1], axis=0)
-                    # Select the correct price kernel if price was (B, N) or (N,)
-                    pk = price_kernels[b][f] if price.ndim == 2 else price_kernels[f]
-                    b_cost += np.sum(x_f * pk * P[f])
-                batch_costs[b] = b_cost * (q / 60)
-            return batch_costs
-
+        # 1. Convert price to a 2D PyTorch Tensor (B, N) for transform_prediction
+        if not isinstance(price, torch.Tensor):
+            price_tensor = torch.tensor(price, dtype=torch.float32)
         else:
-            raise ValueError(f"Unsupported x shape: {x.shape}")
-        
-    def _objective_fun(self, c):
-        MC = self.MC
-        U =  self.U
-        D = self.D
-        E = self.E
-        L = self.L
-        P = self.P
-        idle = self.idle
-        up = self.up
-        down = self.down
-        q= self.q
-        N = 1440//q  
+            price_tensor = price.clone().detach()
+            
+        is_single_batch = False
+        if price_tensor.ndim == 1:
+            price_tensor = price_tensor.unsqueeze(0)
+            is_single_batch = True
 
-        nbMachines = self.nbMachines
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
+        else:
+            # This safely converts Python lists to NumPy arrays
+            x = np.asarray(x, dtype=np.float32)
+
+        # 2. Get the pre-calculated objective coefficients directly from the model
+        # Shape will be (B, Tasks * Machines * N)
+        c_flattened = self.transform_prediction(price_tensor).detach().cpu().numpy()
+
+        # 3. Standardize x to numpy
+        if isinstance(x, torch.Tensor):
+            x = x.detach().cpu().numpy()
+
+        # 5. Calculate the objective via dot product
+        if x.ndim == 1 and c_flattened.shape[0] == 1:
+            # Single instance, single cost (1D dot product)
+            total_cost = np.dot(c_flattened[0], x)
+            return total_cost if not is_single_batch else total_cost.item()
+            
+        elif x.ndim == 2 and c_flattened.shape[0] == x.shape[0]:
+            # Batched instance: element-wise multiplication followed by sum over the variable dimension
+            batch_costs = np.sum(c_flattened * x, axis=1)
+            return batch_costs
+            
+        else:
+            # Handle edge cases (e.g., batched prices with a single x solution)
+            batch_costs = np.sum(c_flattened * x, axis=1)
+            return batch_costs
+        
+    def transform_prediction(self, y_pred):
+        if not isinstance(y_pred, torch.Tensor):
+            y_pred = torch.tensor(y_pred, dtype=torch.float32)
+
+        is_unbatched = False
+        if y_pred.ndim == 1:
+            y_pred = y_pred.unsqueeze(0)
+            is_unbatched = True
+        batch_size = y_pred.shape[0]
+        N = self.N
         nbTasks = self.nbTasks
-        nbResources = self.nbResources
-        Machines = range(nbMachines)
-        Tasks = range(nbTasks)
-        Resources = range(nbResources)
+        nbMachines = self.nbMachines
+        D = self.D
+        P = self.P
+        q = self.q
 
-        # c is the cost vector for each task, shape (Tasks,)
-        # We need to create an expression that sums over all tasks, machines, and time slots
-        
-        obj_expr = gp.quicksum( [self.x[f,m,t]*sum(c[t:t+D[f]])*P[f]*q/60 
-            for f in Tasks for t in range(N-D[f]+1) for m in Machines if (f,m,t) in self.x] )
-        return obj_expr
+        y_adj_list = []
+        for f in range(nbTasks):
+            # Construction of the window matrix A for task f
+            A_f = torch.zeros((N, N), device=y_pred.device)
+            duration = int(D[f])
+            phi_f = P[f] * (q / 60.0)
+
+            for t in range(N):
+                end_t = min(t + duration, N)
+                A_f[t, t:end_t] = 1.0
+
+            # Matrix-vector multiplication equivalent to the moving window sum
+            y_f = phi_f * torch.matmul(y_pred, A_f.T)
+            
+            # Expand across the machine dimension
+            y_f_expanded = y_f.unsqueeze(1).expand(-1, nbMachines, -1)
+            y_adj_list.append(y_f_expanded)
+
+        # Stack along tasks and flatten to exactly match the 1D extraction order of variables
+        y_adjusted = torch.stack(y_adj_list, dim=1)
+        y_flattened = y_adjusted.reshape(batch_size, -1)
+        return y_flattened.squeeze(0) if is_unbatched else y_flattened
     
     def setWeightObj(self, W, c):
         """
@@ -231,12 +225,12 @@ class SolveICON(optGrbModel):
         
         obj_coefficients = np.dot(W, c)
 
-        self._model.setObjective(self._objective_fun(obj_coefficients))
+        self.setObj(obj_coefficients)
 
 
 def energy_generator_factory(instance = 1):
-    def generator(num_data, seed = 42): #TODO: num_data is not yet implemented
-        x_train, y_train, x_val, y_val, x_test, y_test = get_data(seed=seed)
+    def generator(num_groups, seed = 42):
+        x_train, y_train, x_val, y_val, x_test, y_test = get_data(num_groups=num_groups, seed=seed)
 
         params = get_instance_config("data/load{}/day01.txt".format(instance))
         optmodel = SolveICON(**params)
@@ -246,70 +240,48 @@ def energy_generator_factory(instance = 1):
 
 
 if __name__ == "__main__":
-    x_train, y_train, x_val, y_val, x_test, y_test = get_data()
-    total_length = x_train.shape[0] + x_val.shape[0] + x_test.shape[0]
-    sizes = np.linspace(total_length, total_length, 1).astype(int)
-    
-    pipeline = PredictOptimizePipeline(
-        data_sizes=sizes, 
-        data_generator=energy_generator_factory(),
-        num_runs=5
-    )
+    gp.setParam("OutputFlag", 0)
 
-    k_param_grid = {
-        "k": [1, 3, 5, 10],
-    }
-    
-    kernel_param_grid = {
-        **k_param_grid,
-        "kernel" : [
-            KernelPrescription._naive_kernel,
-            KernelPrescription._epanechnikov_kernel,
-            KernelPrescription._tricubic_kernel,
-        ]
-    }
+    num_groups = 50
+    sizes = np.linspace(num_groups, num_groups, 1).astype(int)
 
-    rf_param_grid = {
-        "n_est": [50, 100, 200],
-        "depth": [5, 10, 20, None],
+    instances = [1]
+
+    train_param_grid = {
+        **train_param_grid,
+        "grouped": [True],
+        "batch_size": [64],
     }
 
     weight_model_param_grid = {
-        "hidden_dim": [32, 64],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [1,2],
+        **weight_model_param_grid,
         "shared": [True],
     }
 
-    train_param_grid = {
-        "epochs": [1000],
-        "batch_size": [32],
-        "lr": [1e-3, 5e-4],
-    }
-
     dfl_model_param_grid = {
-        "hidden_dim": [32, 64],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [1,2],
+        **dfl_model_param_grid,
         "shared": [True]
     }
-    # Register models to benchmark
-    pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
-    # pipeline.add_model('Neural Network SFGE',  WeightingTypeFunction.NEURAL, loss=pyepo.predictive.neural.LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid, weight_model = WeightModel) # Discrete Expectation Regret
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
 
-    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
-    # Run and plot
-    pipeline.execute(save_dir="saved_models/energy/")
-    pipeline.plot_results('results/energy/energy_schedule_regret_evolution.png', 'Energy-cost aware scheduling - Regret evolution')
-    pipeline.plot_normalized_bar_chart(sizes[7], 'Nearest Neighbor', 'results/energy/energy_schedule_normalized_barchart.png', 'Energy-cost aware scheduling - Bar chart')
-    pipeline.plot_boxplot(sizes[0], 'results/energy/energy_schedule_boxplot.png', 'Energy-cost aware scheduling - Regret boxplot')
-    pipeline.plot_weight_distribution(150, 'results/energy/energy_schedule_weight_distribution.png', 'Energy-cost aware scheduling - Weight Distribution')
+    for instance in instances:
+        pipeline = PredictOptimizePipeline(
+            data_sizes=sizes, 
+            data_generator=energy_generator_factory(instance=instance),
+            num_runs=5
+        )
+        # Register models to benchmark
+        pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
+        pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = kernel_param_grid)
+        pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+        pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+        pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
+
+        pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+        pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+        pipeline.add_model(r'$z^{MSE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.MSE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+
+        # Run and plot
+        pipeline.execute(save_dir=f"saved_models/energy/instance_{instance}/", force_run=True)
+        pipeline.save_results_to_csv(f'results/energy/instance_{instance}/energy_results.csv')
+        pipeline.plot_boxplot(sizes[0], f'results/energy/instance_{instance}/energy_schedule_boxplot.png', f'Energy-cost aware scheduling - Regret boxplot Instance {instance}')

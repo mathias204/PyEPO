@@ -1,3 +1,7 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/ML-KULeuven/Solver-Free-DFL/
+"""
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
@@ -6,9 +10,10 @@ from pyepo.model.grb import optGrbModel
 from sklearn.model_selection import train_test_split
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
-from pyepo.predictive import KernelPrescription, LossType
+from pyepo.predictive import LossType
 from pyepo.data.generate_california_house_price_mapping import generate_california_house_prices_mapping
 from sklearn.preprocessing import StandardScaler
+from pyepo.hyperparameters import k_param_grid, kernel_param_grid, rf_param_grid, weight_model_param_grid, train_param_grid, dfl_model_param_grid
 
 # optimization model
 class knapSackModel(optGrbModel):
@@ -90,21 +95,20 @@ class knapSackModel(optGrbModel):
         if c.shape[0] != W.shape[1]:
             raise ValueError("Weights and costs must have same first dimension.")
         
-        obj_coefficients = np.dot(W, c)
+        y_hat = np.dot(W, c)
+        self.setObj(y_hat)
 
-        self._model.setObjective(self._objective_fun(obj_coefficients))
 
-
-def knapsack_generator_factory(dims=3, num_item=20):
+def knapsack_generator_factory(dims=4, num_item=25):
     def generator(num_data, seed=42):
         x, c = generate_california_house_prices_mapping(num_data, num_item, seed=seed)
 
-        x_tmp, x_test, c_tmp, c_test = train_test_split(
-            x, c, test_size=0.1, random_state=0 
+        x_train, x_tmp, c_train, c_tmp = train_test_split(
+            x, c, test_size=0.2, random_state=seed 
         )
 
-        x_train, x_val, c_train, c_val = train_test_split(
-            x_tmp, c_tmp, test_size=0.11, random_state=0 
+        x_val, x_test, c_val, c_test = train_test_split(
+            x_tmp, c_tmp, test_size=0.5, random_state=seed
         )
 
         s_scaler = StandardScaler()
@@ -128,7 +132,7 @@ def knapsack_generator_factory(dims=3, num_item=20):
         x_test = x_test_scaled.reshape(test_shape)
 
         weights = np.random.randint(1, 10, size=(dims, num_item))
-        capacities = np.array(0.1 * np.sum(weights, axis=1))
+        capacities = np.array(0.8 * np.sum(weights, axis=1))
 
         optmodel = knapSackModel(weights, capacities)
 
@@ -136,8 +140,7 @@ def knapsack_generator_factory(dims=3, num_item=20):
     return generator
 
 if __name__ == "__main__":
-    # sizes = np.linspace(4, 200, 10).astype(int)
-    sizes = np.linspace(5, 5, 1).astype(int)
+    sizes = np.linspace(50, 50, 1).astype(int)
     
     pipeline = PredictOptimizePipeline(
         data_sizes=sizes, 
@@ -145,59 +148,34 @@ if __name__ == "__main__":
         num_runs=5
     )
 
-    k_param_grid = {
-        "k": [1, 3, 5, 10],
-    }
-    kernel_param_grid = {
-        **k_param_grid,
-        "kernel" : [
-            KernelPrescription._naive_kernel,
-            KernelPrescription._epanechnikov_kernel,
-            KernelPrescription._tricubic_kernel,
-        ]
-    }
-
-    rf_param_grid = {
-        "n_est": [50, 100, 200],
-        "depth": [5, 10, 20, None],
+    train_param_grid = {
+        **train_param_grid,
+        "grouped": [True],
     }
 
     weight_model_param_grid = {
-        "hidden_dim": [32, 64],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [1,2],
+        **weight_model_param_grid,
         "shared": [True],
     }
 
-    train_param_grid = {
-        "epochs": [1000],
-        "batch_size": [32],
-        "lr": [1e-3, 5e-4],
-    }
-
     dfl_model_param_grid = {
-        "hidden_dim": [32, 64],
-        "dropout": [0, 0.1],
-        "num_hidden_layers": [1,2],
+        **dfl_model_param_grid,
         "shared": [True]
     }
 
     # Register models to benchmark
-    pipeline.add_model(r'$\hat{z}^{kNN}_N(x)$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{LOESS}_N(x)$', WeightingTypeFunction.LOESS, param_grid = k_param_grid)
-    pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
-    pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
-    pipeline.add_model(r'$\hat{z}^{CART}_N(x)$', WeightingTypeFunction.CART)
-    pipeline.add_model(r'$\hat{z}^{SAA}_N(x)$', WeightingTypeFunction.SAA)
-    # pipeline.add_model(r'$\hat{z}^{SFGE}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SFGE, epochs=1000, weight_model = WeightModel)
-    # pipeline.add_model(r'$\hat{z}^{DER}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.DER, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
-    pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$\hat{z}^{kNN}_N$', WeightingTypeFunction.NEAREST_NEIGHBOUR, param_grid = k_param_grid)
+    pipeline.add_model(r'$\hat{z}^{LOESS}_N$', WeightingTypeFunction.LOESS, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{KR}_N$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
+    pipeline.add_model(r'$\hat{z}^{RF}_N$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+    pipeline.add_model(r'$\hat{z}^{SPO+}_N$', WeightingTypeFunction.NEURAL_GROUPED, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
 
-    pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$z^{SPO+}$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+    pipeline.add_model(r'$z^{MSE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.MSE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
+
 
     # Run and plot
-    pipeline.execute(save_dir="saved_models/houses/")
-    # pipeline.plot_results('results/houses/knapsack_houses_regret.png', 'Knapsack Houses Benchmark Regret')
+    pipeline.execute(save_dir="saved_models/houses/", force_run=True)
+    pipeline.save_results_to_csv('results/houses/knapsack_houses_results.csv')
     pipeline.plot_boxplot(sizes[0], 'results/houses/knapsack_houses_boxplot.png', 'Knapsack Houses Benchmark Boxplot')
-    # pipeline.plot_normalized_bar_chart(sizes[0], 'Nearest Neighbor', 'results/houses/test.png', 'Knapsack Houses Benchmark Barchart')
