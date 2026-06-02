@@ -10,6 +10,10 @@ from pyepo import EPO
 from enum import Enum
 import copy
 from pyepo.func.surrogate import SFGE, DER, SPOPlus
+from torch.utils.data._utils.collate import default_collate
+from pyepo.predictive.pool_solve import solve_in_pass
+from pathos.multiprocessing import ProcessingPool
+import multiprocessing as mp
 
 class LossType(Enum):
     SFGE = 1
@@ -121,6 +125,11 @@ class NeuralPrediction(PredictivePrescription):
     
     def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
         y_hat = torch.einsum('bn,bnc->bc', weights, costs_batch)
+        y_hat = self.model.transform_prediction(y_hat)
+        true_costs = self.model.transform_prediction(true_costs)
+
+        if not isinstance(true_sols, torch.Tensor):
+            true_sols = torch.tensor(true_sols, dtype=torch.float32, device=y_hat.device)
 
         return spo_plus(y_hat, true_costs, true_sols, true_objs)    
     
@@ -141,25 +150,27 @@ class NeuralPrediction(PredictivePrescription):
         S = int(0.8*len(self.features)) # S for backward calculation
 
         if loss_type == LossType.SPO:
-            spo_plus = SPOPlus(self.model, processes=1)
+            spo_plus = SPOPlus(self.model, processes=0)
 
         train_loader = torch.utils.data.DataLoader(
             optDatasetPP(self.model, X_train, y_train),
-            batch_size=batch_size, shuffle=True, generator=g
+            batch_size=batch_size, shuffle=True, generator=g,
+            collate_fn=custom_collate_fn
         )
         val_loader = torch.utils.data.DataLoader(
             optDatasetPP(self.model, X_val, y_val),
-            batch_size=batch_size, shuffle=False
+            batch_size=batch_size, shuffle=False,
+            collate_fn=custom_collate_fn
         )
 
         feats_full_data = torch.FloatTensor(train_loader.dataset.get_features_costs()[0])
         costs_full_data = torch.FloatTensor(train_loader.dataset.get_features_costs()[1])
-        sols_full_data = torch.FloatTensor(train_loader.dataset.get_sols()[0])
+        sols_full_data = train_loader.dataset.get_sols()[0]
         objs_full_data = torch.FloatTensor(train_loader.dataset.get_sols()[1])
 
         if torch.cuda.is_available():
             feats_full_data = feats_full_data.cuda()
-            sols_full_data = sols_full_data.cuda()
+            # sols_full_data = sols_full_data.cuda()
             objs_full_data = objs_full_data.cuda()
             costs_full_data = costs_full_data.cuda()
 
@@ -178,7 +189,7 @@ class NeuralPrediction(PredictivePrescription):
                 x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = data
 
                 if torch.cuda.is_available():
-                    x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
+                    x, c, y_obj, data_feats, data_costs, data_objs = x.cuda(), c.cuda() , y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_objs.cuda()
                 # forward pass
                 weights = self._get_weights(x, data_feats)             # [B, N]
                 if loss_type == LossType.SFGE:
@@ -211,18 +222,18 @@ class NeuralPrediction(PredictivePrescription):
                     x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = data
                     
                     if torch.cuda.is_available():
-                        x, c, y_sol, y_obj, data_feats, data_costs, data_sols, data_objs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_sols.cuda(), data_objs.cuda()
+                        x, c, y_obj, data_feats, data_costs, data_objs = x.cuda(), c.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda(), data_objs.cuda()
 
                     feats_batch = feats_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()  # [B, N, D]
-                    costs_batch = costs_full_data.unsqueeze(0).expand(len(x), -1,-1).contiguous()
-                    sols = sols_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()
+                    costs_batch = costs_full_data.unsqueeze(0).expand(len(x), -1, -1).contiguous()
+                    sols = expand_sols(sols_full_data, len(x))  # [B, N, D], tensor or list
 
-                    if data_sols.dim() == 2:
+                    if data_feats.dim() == 2:
                         data_sols = data_sols.unsqueeze(0)
                         data_feats = data_feats.unsqueeze(0)
                         data_costs = data_costs.unsqueeze(0)
 
-                    sols = torch.cat((data_sols, sols), dim=1)
+                    sols = cat_sols(data_sols, sols)
                     feats_batch = torch.cat((data_feats, feats_batch), dim=1)
                     costs_batch = torch.cat((data_costs, costs_batch), dim=1)
                         
@@ -266,16 +277,49 @@ class NeuralPrediction(PredictivePrescription):
         return val_loss, info
 
 
+# Helper to expand a "sols" structure (tensor or list-of-dicts) like unsqueeze(0).expand(B, ...)
+def expand_sols(sols_data, batch_size):
+    """Handles both torch tensors and nested lists/arrays containing dicts."""
+    if isinstance(sols_data, torch.Tensor):
+        return sols_data.unsqueeze(0).expand(batch_size, -1, -1).contiguous()
+    else:
+        # sols_data is assumed to be shape [N, D] as a list/np.array of dicts
+        # Result should be [B, N, D]
+        if isinstance(sols_data, np.ndarray):
+            sols_data = sols_data.tolist()
+        return [sols_data for _ in range(batch_size)]  # [B, N, D] as list
+
+def cat_sols(data_sols, sols_batch):
+    if isinstance(sols_batch, torch.Tensor):
+        if isinstance(data_sols, torch.Tensor) and data_sols.dim() == 2:
+            data_sols = data_sols.unsqueeze(0)
+        return torch.cat((data_sols, sols_batch), dim=1)
+    else:
+        if isinstance(data_sols, torch.Tensor):
+            data_sols = data_sols.tolist()
+
+        # Both are [B, N, dict]; concat along N for each batch element
+        return [
+            list(d) + list(s)
+            for d, s in zip(data_sols, sols_batch)
+        ]  # [B, N_data+N_sols, dict]
+    
 class GroupedNeuralPrediction(NeuralPrediction):
-    def __init__(self, feats, costs, model, weight_model, verbose = False):
-        super().__init__(feats, costs, model, weight_model, verbose)
+    def __init__(self, feats, costs, model, weight_model, verbose = False, seed=None):
+        super().__init__(feats, costs, model, weight_model, verbose, seed)
+
+        processes = 0
+        self.processes = mp.cpu_count() if processes == 0 else processes
+        self.pool = ProcessingPool(self.processes)
 
 
     def _spo_loss(self, spo_plus, weights, costs_batch, true_costs, true_sols, true_objs) -> torch.Tensor:
         y_hat = torch.einsum('bxn,bn->bx', weights, costs_batch)
+        y_hat = self.model.transform_prediction(y_hat)
+        true_costs = self.model.transform_prediction(true_costs)
         return spo_plus(y_hat, true_costs, true_sols, true_objs)   
 
-    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE):
+    def train_model(self, epochs=100, batch_size=32, lr=1e-3, val_split=0.11, calc_regret : bool = False, loss_type : LossType = LossType.SFGE, grouped=True):
         g = torch.Generator()
         if self.seed is not None:
             g = g.manual_seed(self.seed)
@@ -288,7 +332,7 @@ class GroupedNeuralPrediction(NeuralPrediction):
 
         optimizer = optim.Adam(self.weight_model.parameters(), lr=lr)
 
-        spo_plus = SPOPlus(self.model, processes=1)
+        spo_plus = SPOPlus(self.model, processes=self.processes)
 
         X_train = X_train.reshape(-1, X_train.shape[-1])
         y_train = y_train.reshape(-1)
@@ -323,7 +367,8 @@ class GroupedNeuralPrediction(NeuralPrediction):
             train_loss = 0.0
             opt_sum = 0.0
             for i, data in enumerate(train_loader):
-                x, c, y_sol, y_obj, data_feats, data_costs = data
+                x, c, data_feats, data_costs = data
+                y_sol, y_obj = solve_in_pass(c, self.model, self.processes, self.pool)
 
                 if torch.cuda.is_available():
                     x, c, y_sol, y_obj, data_feats, data_costs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda()
@@ -337,7 +382,6 @@ class GroupedNeuralPrediction(NeuralPrediction):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-
                 train_loss += loss.item()
 
 
@@ -352,7 +396,9 @@ class GroupedNeuralPrediction(NeuralPrediction):
                 regret_loss = 0.0
                 opt_sum = 0.0
                 for i, data in enumerate(val_loader):
-                    x, c, y_sol, y_obj, data_feats, data_costs = data
+                    x, c, data_feats, data_costs = data
+
+                    y_sol, y_obj = solve_in_pass(c, self.model, self.processes, self.pool)
                     
                     if torch.cuda.is_available():
                         x, c, y_sol, y_obj, data_feats, data_costs = x.cuda(), c.cuda(), y_sol.cuda(), y_obj.cuda(), data_feats.cuda(), data_costs.cuda()
@@ -419,3 +465,22 @@ class EarlyStopper:
                     model.load_state_dict(self.best_state_dict)
                 return True  # stop training
             return False   
+        
+
+def custom_collate_fn(batch):
+    transposed = list(zip(*batch))
+    
+    x = default_collate(transposed[0])
+    c = default_collate(transposed[1])
+    
+    sols_index = list(transposed[2])
+    
+    objs_index = default_collate(transposed[3])
+    x_rest = default_collate(transposed[4])
+    c_rest = default_collate(transposed[5])
+    
+    sols_mask = list(transposed[6])
+    
+    objs_mask = default_collate(transposed[7])
+    
+    return x, c, sols_index, objs_index, x_rest, c_rest, sols_mask, objs_mask

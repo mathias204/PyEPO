@@ -1,12 +1,13 @@
 import time
 from pyepo.predictive.pred import PredictivePrescription, Predictor
-from pyepo.predictive.weight_predictor import MLPWeightPredictor
+from pyepo.predictive.weight_predictor import DotProductWeightPredictor
 from pyepo.predictive.neural import NeuralPrediction, GroupedNeuralPrediction
 from pyepo import EPO
 from pyepo.model.opt import optModel
 from enum import Enum
 import itertools
 import numpy as np
+from pyepo.predictive.pool_solve import solve_in_pass
 
 import copy
 
@@ -22,16 +23,15 @@ class WeightingTypeFunction(Enum):
     CART = "cart"
     SAA = "saa" 
 
-def test_model(prediction_model: Predictor, opt_model: optModel, x_test, c_test, m_test=None):
-    # TODO: can be made a little more efficient by batching, only setting objective and solving can't be batched
+def test_model(prediction_model: Predictor, opt_model: optModel, x_test, c_test, m_test=None, processes=1, pool=None):
     loss = 0
     optsum = 0
 
-    for x, true_cost, m in zip(x_test, c_test, m_test if m_test is not None else [None]*len(x_test)):
+    _, true_objs = solve_in_pass(c_test, opt_model, processes=processes, pool=pool)
+    for x, true_cost, m, true_obj in zip(x_test, c_test, m_test if m_test is not None else [None]*len(x_test), true_objs):
         pred_sol, _ = prediction_model.optimize(x, m)
 
         opt_model.setObj(true_cost)
-        _, true_obj = opt_model.solve()
 
         pred_obj = opt_model.cal_obj(true_cost, pred_sol)
 
@@ -55,7 +55,8 @@ def finetune_predictive_prescription(
     param_grid,
     model_kwargs=None,
     m_val=None,
-    seed=None
+    seed=None,
+    mutli_processing=None
 ):
     if model_kwargs is None:
         model_kwargs = {}
@@ -78,7 +79,7 @@ def finetune_predictive_prescription(
             **model_kwargs,
         )
 
-        score = test_model(model, optmodel, x_val, c_val, m_val)
+        score = test_model(model, optmodel, x_val, c_val, m_val, processes=mutli_processing[0], pool=mutli_processing[1]) if mutli_processing is not None else test_model(model, optmodel, x_val, c_val, m_val)
 
         if score < best_score:
             best_score = score
@@ -107,7 +108,7 @@ def finetune_neural_prescription(
     grouped: bool = False,
     m_train = None,
     m_val = None,
-    seed = None
+    seed = None,
 ):
 
     best_score = np.inf
@@ -126,7 +127,7 @@ def finetune_neural_prescription(
         for train_combo in itertools.product(*train_vals):
             train_params = dict(zip(train_keys, train_combo))
 
-            weight_model = MLPWeightPredictor(
+            weight_model = DotProductWeightPredictor(
                 feats.shape[-1],
                 **arch_params
             )
@@ -159,9 +160,13 @@ def finetune_neural_prescription(
                 best_score = val_loss
                 best_params = {**arch_params, **train_params}
                 best_model = predictor
+                weight_model.to("cpu")
                 info = {"training_time": end_time - start_time,
                         "best_parameters": best_params,
                         **train_info}
+            else:
+                del predictor
+                del weight_model
 
     print("Best params:", best_params)
     return best_model, info

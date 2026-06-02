@@ -61,11 +61,7 @@ class WeightPredictor(nn.Module):
         else:  # Array bias
             layer.bias = nn.Parameter(torch.tensor(np_init_bias, dtype=torch.float32))
 
-
-
-
-
-class MLPWeightPredictor(WeightPredictor, nn.Module):
+class AdditiveAttentionWeightPredictor(WeightPredictor, nn.Module):
     """
     A Multi-Layer Perceptron (MLP) predictor that extends both Predictor and nn.Module.
     This class constructs a feed-forward neural network with configurable layers,
@@ -126,17 +122,6 @@ class MLPWeightPredictor(WeightPredictor, nn.Module):
         self.mlp = nn.Sequential(*layers)
 
     def forward(self, query: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
-        """
-        Performs the forward pass of the MLPPredictor.
-
-        Args:
-            query (torch.Tensor): The query tensor.
-            keys (torch.Tensor): The keys tensor.
-
-        Returns:
-            torch.Tensor: The output tensor from the MLP.
-        """
-        # expand to compare every query with all reference features
         if not self.shared:
             query = query.unsqueeze(1)
 
@@ -155,7 +140,6 @@ class MLPWeightPredictor(WeightPredictor, nn.Module):
             weights = weights.squeeze(1)  # [B, N]
         
         weights = torch.softmax(weights, dim=-1)
-        
         return weights
 
     def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
@@ -181,3 +165,111 @@ class MLPWeightPredictor(WeightPredictor, nn.Module):
             nn.Module: The first layer of the MLP.
         """
         return self.mlp[0]
+
+class MinimalWeightPredictor(WeightPredictor, nn.Module):
+    """
+    A minimal scaled dot-product attention predictor for query-key alignment.
+    """
+    def __init__(
+        self,
+        num_inputs: int,
+        hidden_dim: int = 256,
+        dropout: float = 0.1,
+        num_hidden_layers: int = 0,
+        shared: bool = False,
+        *args,
+        **kwargs,
+    ):
+        WeightPredictor.__init__(self, num_inputs, 1)
+        nn.Module.__init__(self, *args, **kwargs)
+        self.shared = shared
+        self.hidden_dim = hidden_dim
+
+        self.query_proj = nn.Linear(num_inputs, hidden_dim)
+        self.key_proj = nn.Linear(num_inputs, hidden_dim)
+
+    def forward(self, query: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
+        if not self.shared and query.dim() == 2:
+            query = query.unsqueeze(1)  # [B, 1, D]
+
+        Q = self.query_proj(query)  # [B, X, hidden_dim]
+        K = self.key_proj(keys)     # [B, N, hidden_dim]
+
+        # Scaled dot-product
+        scores = torch.bmm(Q, K.transpose(-2, -1)) / (self.hidden_dim ** 0.5)
+        
+        attention_weights = torch.softmax(scores, dim=-1)
+
+        if not self.shared:
+            attention_weights = attention_weights.squeeze(1)  # [B, N]
+        
+        return attention_weights
+        
+    def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
+        return super().parameters(recurse=recurse)
+    
+
+class DotProductWeightPredictor(WeightPredictor, nn.Module):
+    """
+    A two-tower predictor utilizing deep MLPs to extract complex patterns 
+    prior to an efficient scaled dot-product interaction.
+    """
+    def __init__(
+        self,
+        num_inputs: int,
+        hidden_dim: int = 256,
+        num_hidden_layers: int = 3,
+        dropout: float = 0.1,
+        shared: bool = False,
+        *args,
+        **kwargs,
+    ):
+        WeightPredictor.__init__(self, num_inputs, 1)
+        nn.Module.__init__(self, *args, **kwargs)
+        self.shared = shared
+        self.hidden_dim = hidden_dim
+
+        # Deep non-linear feature extractors
+        self.query_mlp = self._build_mlp(num_inputs, hidden_dim, num_hidden_layers, dropout)
+        self.key_mlp = self._build_mlp(num_inputs, hidden_dim, num_hidden_layers, dropout)
+
+        self.attn_dropout = nn.Dropout(dropout)
+
+    def _build_mlp(self, in_dim: int, out_dim: int, layers: int, dropout: float = 0.1) -> nn.Sequential:
+        modules = []
+        current_dim = in_dim
+        
+        for _ in range(layers - 1):
+            modules.append(nn.Linear(current_dim, out_dim))
+            modules.append(nn.GELU())
+            modules.append(nn.LayerNorm(out_dim))
+            modules.append(nn.Dropout(p=dropout))
+            current_dim = out_dim
+            
+        # Final projection without activation to allow full continuous space
+        modules.append(nn.Linear(current_dim, out_dim))
+        
+        return nn.Sequential(*modules)
+
+    def forward(self, query: torch.Tensor, keys: torch.Tensor) -> torch.Tensor:
+        if not self.shared and query.dim() == 2:
+            query = query.unsqueeze(1)  # [B, 1, D]
+
+        # Process queries and keys independently through deep networks
+        Q = self.query_mlp(query)  # [B, X, hidden_dim]
+        K = self.key_mlp(keys)     # [B, N, hidden_dim]
+
+        # Efficient scaled dot-product attention
+        scores = torch.bmm(Q, K.transpose(-2, -1)) / (self.hidden_dim ** 0.5)
+        
+        attention_weights = torch.softmax(scores, dim=-1)
+
+        attention_weights = self.attn_dropout(attention_weights)
+
+        if not self.shared:
+            attention_weights = attention_weights.squeeze(1)  # [B, N]
+        
+        return attention_weights
+        
+    def parameters(self, recurse: bool = True) -> Iterator[Parameter]:
+        return super().parameters(recurse=recurse)

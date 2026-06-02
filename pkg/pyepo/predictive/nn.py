@@ -11,7 +11,7 @@ class NearestPrediction(PredictivePrescription):
         self.tree = cKDTree(self.features)
 
     def _get_weights(self, x):
-        distances, idx = self.tree.query(x, k=self.k, workers=-1)
+        _, idx = self.tree.query(x, k=self.k, workers=-1)
         
         weights = np.zeros(len(self.features))
         weights[idx] = 1.0 / self.k
