@@ -1,3 +1,7 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PyDFLT/PyDFLT
+"""
 import torch
 from torch import nn
 from torch.distributions import Distribution, Normal, LogNormal
@@ -192,7 +196,7 @@ class Noisifier(nn.Module):
             Noisifier: The noisifier instance on the specified device.
         """
         if self.sigma_setting in ["fixed", "cooling", "independent"]:
-            self.sigma = self.sigma.to(device)
+            self.sigma = torch.nn.Parameter(self.sigma.to(device))
         return super().to(device)
 
     def update_t(self, new_t: int) -> None:

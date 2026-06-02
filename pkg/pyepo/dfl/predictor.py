@@ -1,3 +1,7 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PyDFLT/PyDFLT
+"""
 from abc import abstractmethod
 from typing import Iterator
 

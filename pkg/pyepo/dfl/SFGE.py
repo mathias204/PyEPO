@@ -1,13 +1,22 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PyDFLT/PyDFLT
+"""
 import time
 import numpy as np
 import torch
-from pyepo.data.dataset import optDataset
+from pyepo.data.dataset import optDataset, optDatasetShared
 from pyepo.model.opt import optModel
 from pyepo import EPO
 
 from pyepo.dfl.noisifier import Noisifier
 from pyepo.dfl.utils import EarlyStopper, set_seeds
 from pyepo.dfl.DFLMaker import DFLMaker
+
+from pyepo.predictive.pool_solve import solve_in_pass
+from pathos.multiprocessing import ProcessingPool
+import multiprocessing as mp
+
 
 class SFGEDecisionMaker(DFLMaker):
     """
@@ -27,19 +36,28 @@ class SFGEDecisionMaker(DFLMaker):
         lr: float = 1e-4,
         standardize_loss: bool = True,
         epochs: int = 1000,
-        num_samples: int = 1,           # Variable S
+        num_samples: int = 2,           # Variable S
         seed: int | None = None,
+        device: str = "cpu",
+        grouped: bool = False,
     ) -> None:
         self.num_samples = num_samples
         self.standardize_loss = standardize_loss
         self.batch_size = batch_size
         self.num_epochs = epochs
         self.learning_rate = lr
+        self.device = device 
+        noisifier.to(device)
         self.noisifier = noisifier
         self.optmodel = optmodel
         self.early_stopper = EarlyStopper(patience=15, min_delta=0.01)
         self._set_optimizer()
         set_seeds(seed)
+        self.grouped = grouped
+
+        processes = 0
+        self.processes = mp.cpu_count() if processes == 0 else processes
+        self.pool = ProcessingPool(self.processes)
 
     def _set_optimizer(self) -> None:
         """
@@ -75,39 +93,30 @@ class SFGEDecisionMaker(DFLMaker):
         log_probs = individual_log_probs.sum(dim=-1)  # sum over num_parameters dimension (the last one)
 
         # Get objective value per sample
-        objectives = torch.zeros(samples.shape[1], samples.shape[0])  # per batch, per sample
-        for i in range(self.num_samples):
-            # Put samples in prediction batch to get decisions and objective values
-            batch_sample_i = samples[i]  # (B, num_parameters)
-            for j in range(batch_sample_i.shape[0]):
-                self.optmodel.setObj(batch_sample_i[j])
-                sol, _ = self.optmodel.solve()
+        # sol, objectives = solve_in_pass(samples.view(-1, samples.shape[-1]), self.optmodel, processes=self.processes, pool=self.pool)
+        # print(objectives.shape) # should be (batch_size, num_samples)
 
-                obj = self.optmodel.cal_obj(costs[j], sol)
-                objectives[j,i] = float(obj)
-                
-        # Compute loss function value
-        # if self.loss_function_str == "regret":
-        #     loss_terms = (objectives - optimal_objectives) * self.problem.opt_model.model_sense_int
-        # elif self.loss_function_str == "objective":
-        #     loss_terms = objectives * self.problem.opt_model.model_sense_int
+        objectives = torch.zeros(samples.shape[1], samples.shape[0], device=self.device)  # per batch, per sample
+        for i in range(self.num_samples):
+            sol, _ = solve_in_pass(samples[i].cpu(), self.optmodel, processes=self.processes, pool=self.pool)
+
+            obj = self.optmodel.cal_obj(costs, sol)
+            objectives[:, i] = torch.tensor(obj, device=self.device)
+
+        denominator = torch.clamp(torch.abs(optimal_objectives), min=1e-3)
 
         if self.optmodel.modelSense == EPO.MINIMIZE:
-            loss_terms: torch.Tensor =  (objectives - optimal_objectives) / optimal_objectives
+            loss_terms: torch.Tensor =  (objectives - optimal_objectives) / denominator
         else:
-            loss_terms: torch.Tensor = (optimal_objectives - objectives)/ optimal_objectives
-
-        # loss_terms = loss_terms.mean(dim=0)  # take mean over samples
-        # base_loss = loss_terms.detach().numpy().astype(np.float32)
-        # loss_terms = loss_terms.float()
+            loss_terms: torch.Tensor = (optimal_objectives - objectives)/ denominator
 
         if self.standardize_loss:
             loss_terms = self.standardize(loss_terms)
 
         # Compute surrogate loss for gradient
-        base_loss = loss_terms.mean(dim=1).detach().numpy().astype(np.float32)
+        base_loss = loss_terms.mean(dim=1).detach().cpu().numpy().astype(np.float32)
         loss = (loss_terms * log_probs.transpose(0, 1)).mean(dim=1)
-        logger_loss = loss.detach().numpy().astype(np.float32)
+        logger_loss = loss.detach().cpu().numpy().astype(np.float32)
         loss_mean = torch.mean(loss)
 
         # Update
@@ -119,7 +128,7 @@ class SFGEDecisionMaker(DFLMaker):
         log_dict = {
             "loss": logger_loss,
             "eval": base_loss,
-            "sigma": torch.sqrt(distribution.variance).detach().numpy().astype(np.float32),
+            "sigma": torch.sqrt(distribution.variance).detach().cpu().numpy().astype(np.float32),
         }
         return log_dict
     
@@ -136,24 +145,21 @@ class SFGEDecisionMaker(DFLMaker):
         pred = self.noisifier.forward(features)
 
         # Get objective value per prediction
-        objectives = torch.zeros(pred.shape[0]) 
-        for i in range(pred.shape[0]):
-            # Put samples in prediction batch to get decisions and objective values
-            self.optmodel.setObj(pred[i])
-            sol, _ = self.optmodel.solve()
-
-            obj = self.optmodel.cal_obj(costs[i], sol)
-            objectives[i] = float(obj)
+        sol, _ = solve_in_pass(pred.cpu(), self.optmodel, processes=self.processes, pool=self.pool)
+        
+        obj = self.optmodel.cal_obj(costs, sol)
+        objectives = torch.tensor(obj, device=self.device)
 
         opt_obj_squeezed = optimal_objectives.squeeze()
+        denominator = torch.clamp(torch.abs(opt_obj_squeezed), min=1e-3)
 
         if self.optmodel.modelSense == EPO.MINIMIZE:
-            loss_terms: torch.Tensor =  (objectives - opt_obj_squeezed) / opt_obj_squeezed
+            loss_terms: torch.Tensor =  (objectives - opt_obj_squeezed) / denominator
         else:
-            loss_terms: torch.Tensor = (opt_obj_squeezed - objectives)/ opt_obj_squeezed
+            loss_terms: torch.Tensor = (opt_obj_squeezed - objectives)/ denominator
 
         loss = loss_terms.mean(dim=0)
-        logger_loss = loss.detach().numpy().astype(np.float32)
+        logger_loss = loss.cpu().detach().numpy().astype(np.float32)
 
         # Logging
         log_dict = {
@@ -197,7 +203,13 @@ class SFGEDecisionMaker(DFLMaker):
 
         # Run
         for batch in data_loader:
-            x, y, sol, obj = batch
+            if not self.grouped:
+                x, y, sol, obj = batch
+            else:
+                x, y = batch
+                sol, obj = solve_in_pass(y, self.optmodel, processes=self.processes, pool=self.pool)
+                obj = obj.unsqueeze(1)
+            x, y, obj = x.to(self.device), y.to(self.device), obj.to(self.device)
             if mode == "train":
                 batch_results = self.update(x, y, obj)
             else:
@@ -209,12 +221,23 @@ class SFGEDecisionMaker(DFLMaker):
         return epoch_results
     
     def train_model(self, x_train, y_train, x_val, y_val):
+        if self.grouped: 
+            group_size = x_train.shape[1]
+            x_train = x_train.reshape(-1, x_train.shape[-1])
+            y_train = y_train.reshape(-1)
+            x_val = x_val.reshape(-1, x_val.shape[-1])
+            y_val = y_val.reshape(-1)
+            train_dataset = optDatasetShared(self.optmodel, x_train, y_train, group_size=group_size)
+            val_dataset = optDatasetShared(self.optmodel, x_val, y_val, group_size=group_size)
+        else:
+            train_dataset = optDataset(self.optmodel, x_train, y_train)
+            val_dataset = optDataset(self.optmodel, x_val, y_val)
         train_loader = torch.utils.data.DataLoader(
-            optDataset(self.optmodel, x_train, y_train),
+            train_dataset,
             batch_size=self.batch_size, shuffle=True
         )
         val_loader = torch.utils.data.DataLoader(
-            optDataset(self.optmodel, x_val, y_val),
+            val_dataset,
             batch_size=self.batch_size, shuffle=False
         )
         epoch_times = []

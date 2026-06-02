@@ -1,14 +1,22 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PyDFLT/PyDFLT
+"""
 import numpy as np
 import torch
-from pyepo.data.dataset import optDataset
+from pyepo.data.dataset import optDataset, optDatasetShared
 from pyepo.model.opt import optModel
 from pyepo.func.surrogate import SPOPlus
-from pyepo import EPO
 
 from pyepo.dfl.predictor import Predictor
 from pyepo.dfl.utils import EarlyStopper, set_seeds
 from pyepo.dfl.DFLMaker import DFLMaker
 import time
+
+from pyepo.predictive.pool_solve import solve_in_pass
+import multiprocessing as mp
+from pathos.multiprocessing import ProcessingPool
+
 
 class SPODecisionMaker(DFLMaker):
     def __init__(
@@ -18,18 +26,27 @@ class SPODecisionMaker(DFLMaker):
         batch_size: int = 32,
         lr: float = 1e-3,
         epochs: int = 1000,
+        device: str = "cpu",
         seed: int | None = None,
+        grouped: bool = False,
     ) -> None:
+        predictor.to(device)
         self.predictor = predictor
         self.batch_size = batch_size
         self.num_epochs = epochs
         self.learning_rate = lr
         self.optmodel = optmodel
         self.early_stopper = EarlyStopper(patience=15, min_delta=0.01)
-        self.spo_plus = SPOPlus(self.optmodel, processes=1)
+        self.spo_plus = SPOPlus(self.optmodel, processes=0)
+        self.grouped = grouped
+        self.device = device
 
         self._set_optimizer()
         set_seeds(seed)
+
+        processes = 0
+        self.processes = mp.cpu_count() if processes == 0 else processes
+        self.pool = ProcessingPool(self.processes)
     
 
     def _set_optimizer(self) -> None:
@@ -57,11 +74,15 @@ class SPODecisionMaker(DFLMaker):
             dict[str, torch.Tensor]: Accumulated losses and diagnostics for the logger,
                 containing keys 'loss', 'eval', 'solver_calls', and 'sigma'.
         """
-
         # Obtain the distributional predictor and sample
         pred = self.predictor.forward(features)
 
-        loss: torch.Tensor = self.spo_plus(pred, costs, optimal_solutions, optimal_objectives)
+        # Expand pred_cost and true_cost from [batch_size, 48] to [batch_size, 48, N]
+        # Flattening it afterwards aligns with the Gurobi variable extraction order
+        expanded_pred_cost = self.optmodel.transform_prediction(pred)
+        expanded_true_cost = self.optmodel.transform_prediction(costs)
+
+        loss: torch.Tensor = self.spo_plus(expanded_pred_cost, expanded_true_cost, optimal_solutions, optimal_objectives)
 
         # Update
         self.optimizer.zero_grad()
@@ -70,7 +91,7 @@ class SPODecisionMaker(DFLMaker):
 
         # Logging
         log_dict = {
-            "loss": loss.detach().numpy().astype(np.float32),
+            "loss": loss.cpu().detach().numpy().astype(np.float32),
         }
         return log_dict
     
@@ -87,25 +108,12 @@ class SPODecisionMaker(DFLMaker):
         """
         pred = self.predictor.forward(features)
 
-        # Get objective value per prediction
-        objectives = torch.zeros(pred.shape[0]) 
-        for i in range(pred.shape[0]):
-            # Put samples in prediction batch to get decisions and objective values
-            self.optmodel.setObj(pred[i])
-            sol, _ = self.optmodel.solve()
+        expanded_pred_cost = self.optmodel.transform_prediction(pred)
+        expanded_true_cost = self.optmodel.transform_prediction(costs)
 
-            obj = self.optmodel.cal_obj(costs[i], sol)
-            objectives[i] = float(obj)
+        loss: torch.Tensor = self.spo_plus(expanded_pred_cost, expanded_true_cost, optimal_solutions, optimal_objectives)
 
-        opt_obj_squeezed = optimal_objectives.squeeze()
-
-        if self.optmodel.modelSense == EPO.MINIMIZE:
-            loss_terms: torch.Tensor =  (objectives - opt_obj_squeezed) / opt_obj_squeezed
-        else:
-            loss_terms: torch.Tensor = (opt_obj_squeezed - objectives)/ opt_obj_squeezed
-
-        loss = loss_terms.mean(dim=0)
-        logger_loss = loss.detach().numpy().astype(np.float32)
+        logger_loss = loss.cpu().detach().numpy().astype(np.float32)
 
         # Logging
         log_dict = {
@@ -145,7 +153,13 @@ class SPODecisionMaker(DFLMaker):
 
         # Run
         for batch in data_loader:
-            x, y, sol, obj = batch
+            if not self.grouped:
+                x, y, sol, obj = batch
+            else:
+                x, y = batch
+                sol, obj = solve_in_pass(y, self.optmodel, self.processes, self.pool)
+            x, y, sol, obj = x.to(self.device), y.to(self.device), sol.to(self.device), obj.to(self.device)
+            sol = sol.float()
             if mode == "train":
                 batch_results = self.update(x, y, sol, obj)
             else:
@@ -157,12 +171,24 @@ class SPODecisionMaker(DFLMaker):
         return epoch_results
     
     def train_model(self, x_train, y_train, x_val, y_val):
+        if self.grouped: 
+            group_size = x_train.shape[1]
+            x_train = x_train.reshape(-1, x_train.shape[-1])
+            y_train = y_train.reshape(-1)
+            x_val = x_val.reshape(-1, x_val.shape[-1])
+            y_val = y_val.reshape(-1)
+            train_dataset = optDatasetShared(self.optmodel, x_train, y_train, group_size=group_size)
+            val_dataset = optDatasetShared(self.optmodel, x_val, y_val, group_size=group_size)
+        else:
+            train_dataset = optDataset(self.optmodel, x_train, y_train)
+            val_dataset = optDataset(self.optmodel, x_val, y_val)
+
         train_loader = torch.utils.data.DataLoader(
-            optDataset(self.optmodel, x_train, y_train),
-            batch_size=self.batch_size, shuffle=True
+            train_dataset,
+            batch_size=self.batch_size, shuffle=True,
         )
         val_loader = torch.utils.data.DataLoader(
-            optDataset(self.optmodel, x_val, y_val),
+            val_dataset,
             batch_size=self.batch_size, shuffle=False
         )
         epoch_times = []

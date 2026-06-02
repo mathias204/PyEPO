@@ -1,3 +1,7 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PyDFLT/PyDFLT
+"""
 import numpy as np
 import torch
 from pyepo.model.opt import optModel
@@ -17,13 +21,18 @@ class MSEDecisionMaker(DFLMaker):
         lr: float = 1e-3,
         epochs: int = 1000,
         seed: int | None = None,
+        grouped: bool = False,
+        device: str = "cpu",
     ) -> None:
+        predictor.to(device)
         self.predictor = predictor
         self.batch_size = batch_size
         self.num_epochs = epochs
         self.learning_rate = lr
         self.optmodel = optmodel
         self.early_stopper = EarlyStopper(patience=15, min_delta=0.01)
+        self.grouped = grouped
+        self.device = device
 
         self._set_optimizer()
         set_seeds(seed)
@@ -65,7 +74,7 @@ class MSEDecisionMaker(DFLMaker):
 
         # Logging
         log_dict = {
-            "loss": loss.detach().numpy().astype(np.float32),
+            "loss": loss.cpu().detach().numpy().astype(np.float32),
         }
         return log_dict
     
@@ -84,7 +93,7 @@ class MSEDecisionMaker(DFLMaker):
 
         loss_terms = torch.mean((pred - costs)**2)
         loss = loss_terms.mean(dim=0)
-        logger_loss = loss.detach().numpy().astype(np.float32)
+        logger_loss = loss.detach().cpu().numpy().astype(np.float32)
 
         # Logging
         log_dict = {
@@ -125,6 +134,7 @@ class MSEDecisionMaker(DFLMaker):
         # Run
         for batch in data_loader:
             x, y = batch
+            x, y = x.to(self.device), y.to(self.device)
             if mode == "train":
                 batch_results = self.update(x, y)
             else:
@@ -136,6 +146,11 @@ class MSEDecisionMaker(DFLMaker):
         return epoch_results
     
     def train_model(self, x_train, y_train, x_val, y_val):
+        if self.grouped: 
+            x_train = x_train.reshape(-1, x_train.shape[-1])
+            y_train = y_train.reshape(-1)
+            x_val = x_val.reshape(-1, x_val.shape[-1])
+            y_val = y_val.reshape(-1)
         train_loader = torch.utils.data.DataLoader(
             TensorDataset(torch.from_numpy(x_train).float(), torch.from_numpy(y_train).float()),
             batch_size=self.batch_size, shuffle=True

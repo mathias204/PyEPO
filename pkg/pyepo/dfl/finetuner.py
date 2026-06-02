@@ -8,6 +8,8 @@ from pyepo.dfl.SPO import SPODecisionMaker
 from pyepo.predictive.neural import LossType
 import time
 
+import torch
+
 def dfl_finetune(
     x_train,
     y_train,
@@ -42,14 +44,15 @@ def dfl_finetune(
                 y_train.shape[-1],
                 **arch_params
             )
+            device = "cuda" if torch.cuda.is_available() else "cpu"
 
             if loss_type == LossType.SFGE:
                 noisifier = Noisifier(predictor)
-                dfl_maker = SFGEDecisionMaker(noisifier, optmodel, seed=seed, **train_params)
+                dfl_maker = SFGEDecisionMaker(noisifier, optmodel, seed=seed, device=device, **train_params)
             elif loss_type == LossType.SPO:
-                dfl_maker = SPODecisionMaker(predictor, optmodel, seed=seed, **train_params)
+                dfl_maker = SPODecisionMaker(predictor, optmodel, seed=seed, device=device, **train_params)
             elif loss_type == LossType.MSE:
-                dfl_maker = MSEDecisionMaker(predictor, optmodel, seed=seed, **train_params)
+                dfl_maker = MSEDecisionMaker(predictor, optmodel, seed=seed, device=device, **train_params)
 
             val_loss, train_info = dfl_maker.train_model(x_train, y_train, x_val, y_val)
             end_time = time.perf_counter()
