@@ -1,3 +1,8 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/ML-KULeuven/Solver-Free-DFL/
+"""
+
 import numpy as np
 from sklearn.datasets import fetch_california_housing
 

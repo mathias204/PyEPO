@@ -11,7 +11,7 @@ from pyepo.predictive import LossType
 from pyepo.hyperparameters import k_param_grid, kernel_param_grid, rf_param_grid, weight_model_param_grid, train_param_grid, dfl_model_param_grid
 from pyepo.model.grb import optGrbModel
 import torch
-from pyepo.data.new_portfolio import portfolio_pre_run_hook
+from pyepo.data.portfolio_pydflt import portfolio_pre_run_hook
 
 # optimization model
 class portfolioModel(optGrbModel):
