@@ -42,6 +42,7 @@ class optGrbModel(optModel):
         # turn off output
         self._model.Params.outputFlag = 0
         self._objective_cache = {}
+        self.lazy_constraints_method = None
 
 
     def __repr__(self):
@@ -88,6 +89,9 @@ class optGrbModel(optModel):
     def _hash_cost(self, c):
         # Convert to a tuple for hashing
         return tuple(np.round(c, decimals=10))  # rounding avoids float precision mismatch
+    
+    def transform_prediction(self, y_pred):
+        return y_pred
 
     def setWeightObj(self, w, c):
         """
@@ -109,16 +113,7 @@ class optGrbModel(optModel):
             c = c.detach().cpu().numpy()
 
         # Build or retrieve objective terms from cache
-        obj_terms = []
-        for i in range(len(w)):
-            if w[i] <= 1e-6:
-                continue  # skip zero-weight terms
-            key = self._hash_cost(c[i])
-            if key not in self._objective_cache:
-                self._objective_cache[key] = self._objective_fun(c[i])
-            obj_terms.append(w[i] * self._objective_cache[key])
-        
-        obj = gp.quicksum(obj_terms)
+        obj = w @ (c @ self.x)
 
         self._model.setObjective(obj)
 
@@ -159,12 +154,22 @@ class optGrbModel(optModel):
             tuple: optimal solution (list) and objective value (float)
         """
         self._model.update()
-        self._model.optimize()
+
+        if self.lazy_constraints_method is not None:
+            self._model.optimize(self.lazy_constraints_method)
+        else:
+            self._model.optimize()
         # solution
         if isinstance(self.x, gp.MVar):
             sol = self.x.x
+        elif isinstance(self.x, gp.tupledict):
+            # Handles the flat variables from addVars, returning a list/array of values
+            sol = [var.x for var in self.x.values()]
+        elif isinstance(self.x, dict):
+            sol = {k: var.x for k, var in self.x.items()}
         else:
             sol = [self.x[k].x for k in self.x]
+
         # objective value
         obj = self._model.objVal
         return sol, obj

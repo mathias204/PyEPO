@@ -84,6 +84,9 @@ class optModel(ABC):
             tuple: optimal solution (list) and objective value (float)
         """
         raise NotImplementedError
+    
+    def transform_prediction(self, y_pred):
+        raise NotImplementedError("Method 'transform_prediction' is not implemented. Override this method if your model requires transforming predictions before setting the objective.")
 
     def copy(self):
         """
