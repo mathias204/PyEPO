@@ -12,6 +12,47 @@ import json
 import os
 import time
 import pandas as pd
+from pathos.multiprocessing import ProcessingPool
+import multiprocessing as mp
+
+MODEL_COLOR_MAP = {
+    '$\\hat{z}^{kNN}_N$': '#4C72B0',
+    '$\\hat{z}^{kNN}_N(x)$': '#4C72B0',
+    '$\\hat{z}^{LOESS}_N$': '#55A868',
+    '$\\hat{z}^{LOESS}_N(x)$': '#55A868',
+    '$\\hat{z}^{KR}_N$': '#C44E52',
+    '$\\hat{z}^{KR}_N(x)$': '#C44E52',
+    '$\\hat{z}^{Rec.KR}_N$': '#8172B2',
+    '$\\hat{z}^{Rec.KR}_N(x)$': '#8172B2',
+    '$\\hat{z}^{RF}_N$': '#CCB974',
+    '$\\hat{z}^{RF}_N(x)$': '#CCB974',
+    '$\\hat{z}^{CART}_N$': '#64B5CD',
+    '$\\hat{z}^{CART}_N(x)$': '#64B5CD',
+    '$\\hat{z}^{DER}_N$': '#DD8452',
+    '$\\hat{z}^{DER}_N(x)$': '#DD8452',
+    '$\\hat{z}^{SPO+}_N$': '#937860',
+    '$\\hat{z}^{SPO+}_N(x)$': '#937860',
+    '$z^{SPO+}$': '#DA8BC3',
+    '$z^{SFGE}$': '#8C8C8C',
+    '$z^{MSE}$': '#4C72B0',
+}
+
+translation = {
+    r'$\hat{z}^{kNN}_N(x)$': r'$\hat{z}^{kNN}_N$',
+    r'$\hat{z}^{LOESS}_N(x)$': r'$\hat{z}^{LOESS}_N$',
+    r'$\hat{z}^{KR}_N(x)$': r'$\hat{z}^{KR}_N$',
+    r'$\hat{z}^{Rec.-KR}_N(x)$': r'$\hat{z}^{Rec.KR}_N$',
+    r'$\hat{z}^{RF}_N(x)$': r'$\hat{z}^{RF}_N$',
+    r'$\hat{z}^{CART}_N(x)$': r'$\hat{z}^{CART}_N$',
+    r'$\hat{z}^{SAA}_N(x)$': r'$\hat{z}^{SAA}_N$',
+    r'$\hat{z}^{DER}_N(x)$': r'$\hat{z}^{DER}_N$',
+    r'$\hat{z}^{SPO+}_N(x)$': r'$\hat{z}^{SPO+}_N$',
+    r'$\hat{z}^{SPO+}_N(x)_add$' : r'$\hat{z}^{SPO+}_N$',
+    r'$z^{SPO+}(x)$': r'$z^{SPO+}$',
+    r'$z^{SFGE}(x)$': r'$z^{SFGE}$',
+    r'$z^{MSE}(x)$': r'$z^{MSE}$',
+}
+
 
 class PredictOptimizePipeline:
     """Core experimental workflow manager."""
@@ -26,6 +67,12 @@ class PredictOptimizePipeline:
         self.num_runs = num_runs
         self.models = {}
         self.results = {}
+
+        processes = 0
+        processes = mp.cpu_count() if processes == 0 else processes
+        pool = ProcessingPool(processes)
+
+        self.mutli_processing = [processes, pool]
 
     def add_model(self, name, model_type: WeightingTypeFunction, **kwargs):
         """Registers a predictive model."""
@@ -154,16 +201,18 @@ class PredictOptimizePipeline:
             for run in range(self.num_runs):
                 x_train, c_train, x_val, c_val, x_test, c_test, optmodel, aux = self.data_generator(num_data, seed=run)
 
+                model_names_exlude = [r'$\hat{z}^{KR}_N(x)$', r'$\hat{z}^{LOESS}_N(x)$', r'$\hat{z}^{Rec.-KR}_N(x)$']
+
                 for model_name, config in self.models.items():
                     cache_filepath = self._generate_cache_filepath(save_dir, model_name, config, num_data, run)
 
-                    if os.path.exists(cache_filepath) and not force_run:
+                    if os.path.exists(cache_filepath) and not force_run and model_name not in model_names_exlude:
                         print(f"Loading cached {model_name} | Size: {num_data} | Run: {run+1}/{self.num_runs}")
                         predictor, result = self._load_cached_model(cache_filepath, optmodel)
                         
                         if predictor is None:
                             # Reconstruct PyTorch architecture if state_dict was loaded
-                            predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'))
+                            predictor = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'), seed=run)
                             checkpoint = torch.load(cache_filepath)
                             predictor.load_state_dict(checkpoint['state_dict'])
                             
@@ -174,7 +223,7 @@ class PredictOptimizePipeline:
                         predictor, info = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel, m_train=aux.get('train'), m_val=aux.get('val'), seed=run)
 
                         start_time = time.perf_counter()
-                        result = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'))
+                        result = test_model(predictor, optmodel, x_test, c_test, m_test=aux.get('test'), processes=self.mutli_processing[0], pool=self.mutli_processing[1])
                         end_time = time.perf_counter()
                         info['testing_time'] = end_time - start_time
                         info['result'] = result
@@ -189,19 +238,19 @@ class PredictOptimizePipeline:
         match config["type"]:
             case WeightingTypeFunction.NEAREST_NEIGHBOUR:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(NearestPrediction, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
+                return finetune_predictive_prescription(NearestPrediction, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed, mutli_processing=self.mutli_processing)
             
             case WeightingTypeFunction.LOESS:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(LOESS, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
+                return finetune_predictive_prescription(LOESS, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed, mutli_processing=self.mutli_processing)
             
             case WeightingTypeFunction.KERNEL:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(KernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
+                return finetune_predictive_prescription(KernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed, mutli_processing=self.mutli_processing)
             
             case WeightingTypeFunction.RKERNEL:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
+                return finetune_predictive_prescription(RecursiveKernelPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed, mutli_processing=self.mutli_processing)
             
             case WeightingTypeFunction.CART:
                 feats = np.concatenate((x_train, x_val), axis=0)
@@ -223,7 +272,7 @@ class PredictOptimizePipeline:
         
             case WeightingTypeFunction.RANDOM_FOREST:
                 param_grid = params.get('param_grid')
-                return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed)
+                return finetune_predictive_prescription(RandomForestPrescription, x_train, c_train, x_val, c_val, optmodel, param_grid, m_val=m_val, seed=seed, mutli_processing=self.mutli_processing)
         
             case WeightingTypeFunction.NEURAL:
                 feats = np.concatenate((x_train, x_val), axis=0)
@@ -387,47 +436,82 @@ class PredictOptimizePipeline:
             plt.savefig(save_path, dpi=300)
             plt.close()
 
-
-    def plot_weight_distribution(self, data_size, save_path, title=None):
+    def plot_weight_distribution(self, save_dir, data_size, save_path, title=None):
+        
         custom_settings = {
-                'font.size': 20,
-                'axes.titlesize': 24,
-                'axes.labelsize': 20
-            }
+            'font.size': 18,
+            'axes.titlesize': 18,
+            'axes.labelsize': 18
+        }
+
 
         with plt.rc_context(rc=custom_settings):
             num_models = len(self.models)
-            fig, axes = plt.subplots(num_models, 1, figsize=(14, 4 * num_models), sharex=True)
+            # Calculate rows needed for 2 columns using ceiling division
+            num_rows = (num_models + 1) // 2 
+            
+            fig, axes = plt.subplots(num_rows, 2, figsize=(15, 3 * num_rows), sharex=True)
+            run = 0
 
-            x_train, c_train, x_val, c_val, x_test, _, optmodel, _ = self.data_generator(data_size, seed=45)
+            x_train, c_train, x_val, c_val, x_test, _, optmodel, _ = self.data_generator(data_size, seed=run)
             x_sample = x_test[0]
 
-            # Handle single model case to keep axes iterable
-            if num_models == 1:
-                axes = [axes]
+            # Flatten to 1D array to keep loop indexing clean regardless of grid shape
+            axes = axes.flatten() 
+
+            weights_len = 0
 
             for i, (model_name, config) in enumerate(self.models.items()):
+                color = MODEL_COLOR_MAP.get(model_name)
+                cache_filepath = self._generate_cache_filepath(save_dir, model_name, config, data_size, run)
+
+                if os.path.exists(cache_filepath):
+                    print(f"Loading cached {model_name} | Size: {data_size} | Run: {run+1}/{self.num_runs}")
+                    predictor, result = self._load_cached_model(cache_filepath, optmodel)
+                    print(predictor)
+                else:
+                    raise ValueError("predictor not found")
+
                 if config['type'] == WeightingTypeFunction.NEURAL_DFL:
                     continue
 
-                predictor,_ = self._initialize_and_train(config, x_train, c_train, x_val, c_val, optmodel)
                 weights = predictor._get_weights(x_sample)
                 
                 if isinstance(weights, torch.Tensor):
                     weights = weights.detach().cpu().numpy().flatten()
-                
-                indices = np.arange(len(weights))
-                axes[i].bar(indices, weights, alpha=0.8, color=plt.cm.viridis(i / num_models))
-                
-                axes[i].set_title(f'Weight Distribution: {model_name}')
-                axes[i].set_ylabel(r'$\omega_i$')
-                
-                axes[i].xaxis.set_major_locator(mtick.MaxNLocator(integer=True, nbins=20))
-                axes[i].grid(axis='y', alpha=0.3, linestyle='--')
 
-            plt.xlabel(r'Data Point Index $i$')
-            plt.xlim(left=0, right=len(x_train))
+                weights_len = len(weights)
+                indices = np.arange(weights_len)
+                
+                # Plot directly to the corresponding axis
+                ax = axes[i]
+                ax.bar(indices, weights, alpha=0.8, color=color)
+                
+                print(translation.get(model_name))
+                ax.set_title(translation.get(model_name))
+                ax.set_ylabel('Weight Value')
+                
+                ax.xaxis.set_major_locator(mtick.MaxNLocator(integer=True, nbins=20))
+                ax.grid(axis='y', alpha=0.3, linestyle='--')
+                ax.set_xlim(left=0, right=weights_len)
+
+                if i in [5, 6]:
+                    ax.set_xticks(range(0, 46, 5))
+                    # Force Matplotlib to display the labels despite sharex=True
+                    ax.tick_params(labelbottom=True)
+                else:
+                    # Ensure no labels are shown for others
+                    plt.setp(ax.get_xticklabels(), visible=False)
+
+            # Hide any unused subplots if the total number of models is odd
+            for j in range(num_models, len(axes)):
+                fig.delaxes(axes[j])
+
+            # Assuming 'ax' is the axes object for the plot
+            ax.set_xticks(range(0, 46, 5))
+            # Use supxlabel for a centered x-axis label across multiple columns
+            fig.supxlabel(r'Data Point Index $i$')
             plt.tight_layout()
             self._check_path(save_path)
-            plt.savefig(save_path)
+            plt.savefig(save_path, dpi=300)
             plt.close()
