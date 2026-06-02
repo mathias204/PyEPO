@@ -1,18 +1,18 @@
 from pyepo.predictive.pred import PredictivePrescription
-from scipy.spatial import distance
+from scipy.spatial import cKDTree
 import numpy as np 
 
 class NearestPrediction(PredictivePrescription):
 
-    def __init__(self, feats, costs, model, k):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
-        self.k = min(k, len(self.features)-1) #TODO: see if this -1 can be done, I think mathematically it is not the same
+    def __init__(self, feats, costs, model, k, seed=None):
+        super().__init__(model, feats, costs, seed=seed)
+        self.k = min(k, len(self.features)-1)
+
+        self.tree = cKDTree(self.features)
 
     def _get_weights(self, x):
-        dists = distance.cdist([x], self.features, metric="euclidean").flatten()
-        idx = np.argpartition(dists, self.k)[:self.k]
+        _, idx = self.tree.query(x, k=self.k, workers=-1)
+        
         weights = np.zeros(len(self.features))
         weights[idx] = 1.0 / self.k
         return weights

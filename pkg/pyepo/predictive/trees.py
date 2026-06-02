@@ -3,21 +3,23 @@ import numpy as np
 from sklearn import tree
 
 class CartPrescription(PredictivePrescription):
-    def __init__(self, feats, costs, model, random_state=None):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
-        self.random_state = random_state
+    def __init__(self, feats, costs, model, seed=None):
+        super().__init__(model, feats, costs, seed)
 
-        dtr = tree.DecisionTreeRegressor(random_state=self.random_state)
-        self.weight_model = dtr.fit(feats, costs)
+        dtr = tree.DecisionTreeRegressor(random_state=self.seed)
+        self.weight_model = dtr.fit(self.features, self.costs)
+
+        self._precompute_leaf_weights()
+
+    def _precompute_leaf_weights(self):
+        self._train_leaf_indices = self.weight_model.apply(self.features)
 
     def _get_weights(self, x):
         N = len(self.features)
         weights = np.zeros(N)
 
         leaf_x = self.weight_model.apply([x])[0]
-        leaf_train = self.weight_model.apply(self.features)
+        leaf_train = self._train_leaf_indices
         same_leaf = (leaf_train == leaf_x)
         idx = np.where(same_leaf)[0]
         if len(idx) > 0:

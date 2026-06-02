@@ -19,17 +19,19 @@ from pyepo.model.mpax import optMpaxModel
 
 class optModule(nn.Module):
     """
-        An abstract module for the learning to rank losses, which measure the difference in how the predicted cost
-        vector and the true cost vector rank a pool of feasible solutions.
+    An abstract module for differentiable optimization losses in end-to-end
+    predict-then-optimize. It provides common functionality (multiprocessing,
+    solution pooling, loss reduction) for all loss modules.
     """
-    def __init__(self, optmodel, processes=1, solve_ratio=1, reduction="mean", dataset=None):
+    def __init__(self, optmodel, processes=1, solve_ratio=1, reduction="mean", dataset=None, require_solpool=False):
         """
         Args:
-            optmodel (optModel): an PyEPO optimization model
+            optmodel (optModel): a PyEPO optimization model
             processes (int): number of processors, 1 for single-core, 0 for all of cores
             solve_ratio (float): the ratio of new solutions computed during training
             reduction (str): the reduction to apply to the output
             dataset (None/optDataset): the training data
+            require_solpool (bool): if True, always initialize solution pool from dataset
         """
         super().__init__()
         # optimization model
@@ -41,10 +43,10 @@ class optModule(nn.Module):
             print("MPAX does not support multiprocessing. Setting `processes = 1`.")
             processes = 1
         # number of processes
-        if processes not in range(mp.cpu_count()+1):
+        if processes < 0 or processes > mp.cpu_count():
             raise ValueError("Invalid processors number {}, only {} cores.".
                 format(processes, mp.cpu_count()))
-        self.processes = mp.cpu_count() if not processes else processes
+        self.processes = mp.cpu_count() if processes == 0 else processes
         # single-core
         if self.processes == 1:
             self.pool = None
@@ -58,13 +60,16 @@ class optModule(nn.Module):
             raise ValueError("Invalid solving ratio {}. It should be between 0 and 1.".
                 format(self.solve_ratio))
         self.solpool = None
-        if self.solve_ratio < 1: # init solution pool
+        self._solset = set()
+        if self.solve_ratio < 1 or require_solpool: # init solution pool
             if not isinstance(dataset, optDataset): # type checking
                 raise TypeError("dataset is not an optDataset")
-            # convert to tensor
-            self.solpool = torch.tensor(dataset.sols.copy(), dtype=torch.float32)
-            # remove duplicate
-            self.solpool = torch.unique(self.solpool, dim=0)
+            # convert to tensor and deduplicate
+            sols = dataset.sols.clone()
+            sols = torch.unique(sols, dim=0)
+            self.solpool = sols
+            # build hash set for O(1) dedup
+            self._solset = {s.numpy().tobytes() for s in sols.cpu()}
         # reduction
         self.reduction = reduction
 
@@ -76,16 +81,15 @@ class optModule(nn.Module):
         # convert tensor
         pass
 
-    def _update_solution_pool(self, sol):
+    def _reduce(self, loss):
         """
-        Add new solutions to solution pool
+        Apply reduction to loss tensor
         """
-        if self.solpool is None:
-            self.solpool = sol.clone()
-            return
-        # to tenstor
-        sol = torch.as_tensor(sol).to(self.solpool.device)
-        # add into solpool
-        self.solpool = torch.cat((self.solpool, sol), dim=0)
-        # remove duplicate
-        self.solpool = torch.unique(self.solpool, dim=0)
+        if self.reduction == "mean":
+            return torch.mean(loss)
+        elif self.reduction == "sum":
+            return torch.sum(loss)
+        elif self.reduction == "none":
+            return loss
+        else:
+            raise ValueError("No reduction '{}'.".format(self.reduction))

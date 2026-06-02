@@ -3,10 +3,8 @@ import numpy as np
 
 
 class SAA(PredictivePrescription):
-    def __init__(self, feats, costs, model):
-        super().__init__(model)
-        self.features = feats
-        self.costs = costs
+    def __init__(self, feats, costs, model, seed=None):
+        super().__init__(model, feats, costs, seed)
     
     def _get_weights(self, x):
         return np.ones(len(self.features), dtype=float) / len(self.features)

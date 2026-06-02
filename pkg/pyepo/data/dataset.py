@@ -3,16 +3,12 @@
 """
 optDataset class based on PyTorch Dataset
 """
-
-import time
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from pyepo.model.opt import optModel
-
 import random
 from scipy.spatial import distance
 
@@ -103,13 +99,116 @@ class optDataset(Dataset):
         return (
             torch.FloatTensor(self.feats[index]),
             torch.FloatTensor(self.costs[index]),
-            torch.FloatTensor(self.sols[index]),
+            self.sols[index],
             torch.FloatTensor(self.objs[index]),
         )
     
+
+class optDatasetShared(Dataset):
+    """
+    This class is Torch Dataset for optimization problems.
+
+    Attributes:
+        model (optModel): Optimization models
+        feats (np.ndarray): Data features
+        costs (np.ndarray): Cost vectors
+        sols (np.ndarray): Optimal solutions
+        objs (np.ndarray): Optimal objective values
+    """
+
+    def __init__(self, model, feats, costs, group_size):
+        """
+        A method to create a optDataset from optModel
+
+        Args:
+            model (optModel): an instance of optModel
+            feats (np.ndarray): data features
+            costs (np.ndarray): costs of objective function
+            group_size (int): size of each group
+        """
+        if not isinstance(model, optModel):
+            raise TypeError("arg model is not an optModel")
+        self.model = model
+        # data
+        self.feats = feats
+        self.costs = costs
+        self.group_size = group_size
+
+    def _getSols(self):
+        """
+        A method to get optimal solutions for all cost vectors
+        """
+        sols = []
+        objs = []
+        print("\nOptimizing for optDataset...", flush=True)
+        for c in tqdm(self.costs):
+            try:
+                sol, obj = self._solve(c)
+                # to numpy
+                if isinstance(sol, torch.Tensor):
+                    sol = sol.detach().cpu().numpy()
+            except:
+                raise ValueError(
+                    "For optModel, the method 'solve' should return solution vector and objective value."
+                )
+            sols.append(sol)
+            objs.append([obj])
+        return np.array(sols), np.array(objs)
+
+    def _solve(self, cost):
+        """
+        A method to solve optimization problem to get an optimal solution with given cost
+
+        Args:
+            cost (np.ndarray): cost of objective function
+
+        Returns:
+            tuple: optimal solution (np.ndarray) and objective value (float)
+        """
+        self.model.setObj(cost)
+        sol, obj = self.model.solve()
+        return sol, obj
+
+    def __len__(self):
+        """
+        A method to get data size
+
+        Returns:
+            int: the number of optimization problems
+        """
+        return len(self.costs)
+
+    def __getitem__(self, index):
+        """
+        A method to retrieve data
+
+        Args:
+            index (int): data index
+
+        Returns:
+            tuple: data features (torch.tensor), costs (torch.tensor), optimal solutions (torch.tensor) and objective values (torch.tensor)
+        """
+        N = len(self.feats)
+        Z = self.group_size
+
+        raw_samples = random.sample(range(N - 1), Z - 1)
+        sampled_indices = [s if s < index else s + 1 for s in raw_samples]
+    
+        group_indices = [index] + sampled_indices
+
+        X_group = self.feats[group_indices]
+        C_group = self.costs[group_indices]
+
+
+        return (
+            torch.FloatTensor(X_group),
+            torch.FloatTensor(C_group),
+        )
+
+    
 class optDatasetPP(Dataset):
     """
-    This class is Torch Dataset for optimization problems specifically to train pedictive prescriptions.
+    This class is Torch Dataset for optimization problems specifically to train a weighted pedictive prescriptions.
 
     Reference
 
@@ -146,15 +245,9 @@ class optDatasetPP(Dataset):
         objs = []
         print("\nOptimizing for optDataset...", flush=True)
         for c in tqdm(self.costs):
-            try:
-                sol, obj = self._solve(c)
-                # to numpy
-                if isinstance(sol, torch.Tensor):
-                    sol = sol.detach().cpu().numpy()
-            except:
-                raise ValueError(
-                    "For optModel, the method 'solve' should return solution vector and objective value."
-                )
+            sol, obj = self._solve(c)
+            if isinstance(sol, torch.Tensor):
+                sol = sol.detach().cpu().numpy()
             sols.append(sol)
             objs.append([obj])
         return np.array(sols), np.array(objs)
@@ -167,6 +260,13 @@ class optDatasetPP(Dataset):
             tuple: optimal solutions (np.ndarray) and objective values (np.ndarray)
         """
         return self.sols, self.objs
+    
+    def get_features_costs(self):
+        if self.feats.ndim == 3:
+            feats = self.feats.reshape(-1, self.feats.shape[-1])
+            costs = self.costs.reshape(-1)
+            return feats, costs
+        return self.feats, self.costs
 
     def _solve(self, cost):
         """
@@ -217,16 +317,127 @@ class optDatasetPP(Dataset):
         X_rest = self.feats[mask]
         C_rest = self.costs[mask]
 
+        if X_rest.ndim == 3:
+            X_rest = X_rest.reshape(-1, X_rest.shape[-1])
+            C_rest = C_rest.reshape(-1) 
+
         return (
             torch.FloatTensor(x_i), 
             torch.FloatTensor(c_i), 
-            torch.FloatTensor(self.sols[index]),
+            self.sols[index],
             torch.FloatTensor(self.objs[index]),
             torch.FloatTensor(X_rest), 
             torch.FloatTensor(C_rest),
-            torch.FloatTensor(self.sols[mask]),
+            self.sols[mask],
             torch.FloatTensor(self.objs[mask]),
         )
+    
+
+class optDatasetSharedPP(Dataset):
+    """
+    This class is Torch Dataset for optimization problems specifically to train pedictive prescriptions for which the instances are independent.
+
+    Reference
+
+    Attributes:
+        model (optModel): Optimization models
+        feats (np.ndarray): Data features
+        costs (np.ndarray): Cost vectors
+        group_size (int): number of instances in a group
+    """
+    def __init__(self, model: optModel, feats, costs, group_size):
+        """
+        A method to create a optDataset from optModel
+
+        Args:
+            model (optModel): an instance of optModel
+            feats (np.ndarray): data features
+            costs (np.ndarray): costs of objective function
+            group_size (int): number of instances in a group
+        """
+        if not isinstance(model, optModel):
+            raise TypeError("arg model is not an optModel")
+        self.model = model
+        # data
+        self.feats = feats
+        self.costs = costs
+        self.group_size = group_size
+    
+    def get_features_costs(self):
+        return self.feats, self.costs
+
+    def _solve(self, cost):
+        """
+        A method to solve optimization problem to get an optimal solution with given cost
+
+        Args:
+            cost (np.ndarray): cost of objective function
+
+        Returns:
+            tuple: optimal solution (np.ndarray) and objective value (float)
+        """
+        self.model.setObj(cost)
+        sol, obj = self.model.solve()
+        return sol, obj
+
+    def __len__(self):
+        """
+        A method to get data size
+
+        Returns:
+            int: the number of optimization problems
+        """
+        return len(self.costs)
+
+    def __getitem__(self, index):
+        """
+        A method to retrieve data
+
+        Args:
+            index (int): data index
+
+        Returns:
+            tuple:  data features sample (torch.tensor), 
+                    cost vector sample (torch.tensor), 
+                    optimal solution vector sample (torch.tensor),
+                    objective values sample (torch.tensor),
+                    data features excluding sample (torch.tensor),
+                    costs excluding sample (torch.tensor),
+        """
+
+        N = len(self.feats)
+        Z = self.group_size
+
+        raw_samples = random.sample(range(N - 1), Z - 1)
+        sampled_indices = [s if s < index else s + 1 for s in raw_samples]
+    
+        group_indices = [index] + sampled_indices
+
+        X_group = self.feats[group_indices]
+        C_group = self.costs[group_indices]
+
+        # sol, obj = self._solve(C_group)
+
+        mask = torch.ones(N, dtype=torch.bool)
+        mask[group_indices] = False
+        
+        X_rest = self.feats[mask]
+        C_rest = self.costs[mask]
+
+        #TODO: calculate the optimal solutions and objective values for the group 
+
+        if X_rest.ndim == 3:
+            X_rest = X_rest.reshape(-1, X_rest.shape[-1])
+            C_rest = C_rest.reshape(-1) 
+
+        return (
+            torch.FloatTensor(X_group), 
+            torch.FloatTensor(C_group), 
+            # torch.FloatTensor(sol),
+            # torch.FloatTensor([obj]),
+            torch.FloatTensor(X_rest), 
+            torch.FloatTensor(C_rest),
+        ) 
 
 
 class optDatasetKNN(optDataset):

@@ -1,34 +1,53 @@
+"""
+This script includes code adapted from the PredOpt benchmarks repository:
+https://github.com/PredOpt/predopt-benchmarks
+"""
 import gurobipy as gp
 from gurobipy import GRB
 import numpy as np
-from pyepo.data.knapsack import genData
 from pyepo.model.grb import optGrbModel
 from sklearn.model_selection import train_test_split
 import torch
 from pyepo.eval.optimize_pipeline import PredictOptimizePipeline
 from pyepo.predictive.utils import WeightingTypeFunction
 from pyepo.predictive import LossType
-from pyepo.hyperparameters import k_param_grid, kernel_param_grid, weight_model_param_grid, train_param_grid, dfl_model_param_grid, rf_param_grid
+from pyepo.hyperparameters import k_param_grid, kernel_param_grid, rf_param_grid, weight_model_param_grid, train_param_grid, dfl_model_param_grid
+import networkx as nx
+from pyepo.data.shortestpath import genData
 
-# optimization model
-class knapSackModel(optGrbModel):
-    def __init__(self, weights):
-        self.weights = np.array(weights)
-        self.num_item = len(weights[0])
+V = range(25)
+E = []
+
+for i in V:
+    if (i+1)%5 !=0:
+        E.append((i,i+1))
+    if i+5<25:
+        E.append((i,i+5))
+
+G = nx.DiGraph()
+G.add_nodes_from(V)
+G.add_edges_from(E)
+    
+class ShortestPathModel(optGrbModel):
+    def __init__(self, G):
+        self.G = G
         super().__init__()
 
     def _getModel(self):
-        # ceate a model
-        m = gp.Model()
-        # varibles
-        x = m.addMVar(shape=(self.num_item,), name="x", vtype=GRB.BINARY)
-        # model sense
-        m.modelSense = GRB.MAXIMIZE
-        # constraints
-        m.addConstr(gp.quicksum([self.weights[0,i] * x[i] for i in range(self.num_item)]) <= 20)
-        m.addConstr(gp.quicksum([self.weights[1,i] * x[i] for i in range(self.num_item)]) <= 20)
-        m.addConstr(gp.quicksum([self.weights[2,i] * x[i] for i in range(self.num_item)]) <= 20)
-        return m, x
+        A = nx.incidence_matrix(self.G,oriented=True).todense()
+        b =  np.zeros(len(A))
+        b[0] = -1
+        b[-1] =1
+        model = gp.Model()
+        model.setParam('OutputFlag', 0)
+
+        x = model.addMVar(shape=A.shape[1], vtype=gp.GRB.BINARY, name="x")
+        
+        model.modelSense = GRB.MAXIMIZE
+
+        model.addConstr(A @ x == b, name="eq")
+
+        return model, x
     
     def cal_obj(self, c, x):
         # check if c is a PyTorch tensor
@@ -75,11 +94,11 @@ class knapSackModel(optGrbModel):
 
         else:
             raise ValueError(f"Unsupported x shape {x.shape}")
-
-def knapsack_generator_factory(num_feat=5, num_item=32, degree=4):
-    def generator(num_data, seed):
-        weights, x, c = genData(
-            num_data, num_feat, num_item, dim=3, deg=degree, noise_width=0.5, seed=seed
+        
+def shortest_path_generator_factory(deg= 4, num_feat=5):
+    def generator(num_data, seed=42):
+        x, c = genData(
+            num_data, num_feat, (5,5), deg=deg, noise_width=0.5, seed=seed
         )
 
         x_train, x_tmp, c_train, c_tmp = train_test_split(
@@ -90,21 +109,21 @@ def knapsack_generator_factory(num_feat=5, num_item=32, degree=4):
             x_tmp, c_tmp, test_size=0.5, random_state=seed
         )
 
-        optmodel = knapSackModel(weights)
+        optmodel = ShortestPathModel(G)
         return x_train, c_train, x_val, c_val, x_test, c_test, optmodel, {}
     return generator
+
 
 if __name__ == "__main__":
     gp.setParam("OutputFlag", 0)
 
     degrees = [1,2,4,6,8]
     sizes = np.linspace(500, 500, 1).astype(int)
-
-    for degree in degrees: 
-        
+    
+    for degree in degrees:
         pipeline = PredictOptimizePipeline(
             data_sizes=sizes, 
-            data_generator=knapsack_generator_factory(degree=degree),
+            data_generator=shortest_path_generator_factory(deg=degree),
             num_runs=5
         )
 
@@ -114,16 +133,14 @@ if __name__ == "__main__":
         pipeline.add_model(r'$\hat{z}^{KR}_N(x)$', WeightingTypeFunction.KERNEL, param_grid = kernel_param_grid)
         pipeline.add_model(r'$\hat{z}^{Rec.-KR}_N(x)$', WeightingTypeFunction.RKERNEL, param_grid = kernel_param_grid)
         pipeline.add_model(r'$\hat{z}^{RF}_N(x)$', WeightingTypeFunction.RANDOM_FOREST, param_grid = rf_param_grid)
+        pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid) # Discrete Expectation Regret
         pipeline.add_model(r'$\hat{z}^{SPO+}_N(x)$', WeightingTypeFunction.NEURAL, loss=LossType.SPO, weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid,)
-        pipeline.add_model(r'$\hat{z}^{DER}_N(x)$',  WeightingTypeFunction.NEURAL, loss=LossType.DER,      weight_model_param_grid=weight_model_param_grid, train_param_grid=train_param_grid)
 
         pipeline.add_model(r'$z^{SPO+}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SPO, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
         pipeline.add_model(r'$z^{SFGE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.SFGE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
         pipeline.add_model(r'$z^{MSE}(x)$', WeightingTypeFunction.NEURAL_DFL, loss=LossType.MSE, dfl_predictor_param_grid=dfl_model_param_grid, train_param_grid=train_param_grid)
 
         # Run and plot
-        pipeline.execute(save_dir=f"saved_models/knapsack/yet/degree_{degree}/", force_run=False)
-        pipeline.save_results_to_csv(f"results/knapsack_normal/attention/degree_{degree}/optimize_results.csv")
-        pipeline.plot_weight_distribution(save_dir=f"saved_models/knapsack/yet/degree_{degree}/", data_size=sizes[0], save_path=f"results/knapsack_normal/degree_{degree}/weight_distribution.png", title=f"Weight Distribution for Knapsack (Degree {degree})")
-        pipeline.plot_boxplot(sizes[0], f'results/knapsack_normal/attention/degree_{degree}/regret_boxplot.png', 'Knapsack Benchmark Boxplot')
-
+        pipeline.execute(save_dir=f"saved_models/shortest_path/degree_{degree}/", force_run=True)
+        pipeline.save_results_to_csv(f'results/shortest_path/degree_{degree}/shortest_path_results.csv')
+        pipeline.plot_boxplot(sizes[0], f'results/shortest_path/degree_{degree}/shortest_path_boxplot.png', f'Shortest Path Benchmark Boxplot Degree {degree}')
